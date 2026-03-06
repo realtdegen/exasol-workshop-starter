@@ -94,6 +94,56 @@ cd ~/deployment
 ~/exasol destroy
 ```
 
+### 8. Load NHS Prescription Data
+
+Install dependencies and find available data URLs:
+
+```bash
+cd ~/code
+uv add pyexasol requests
+uv run python find_urls.py
+```
+
+This queries the API and saves `prescription_urls.json` with ~138 months of data (2014-present, ~840 GB total).
+
+Stage one month of data to test (each month is ~6 GB, ~18M rows):
+
+```bash
+uv run python ingest.py stage -t 1 -n 1
+```
+
+To load more months in parallel (e.g. 6 months with 2 threads):
+
+```bash
+uv run python ingest.py stage -t 2 -n 6
+```
+
+Create the final PRESCRIPTIONS table from staging tables:
+
+```bash
+uv run python ingest.py finalize
+```
+
+Drop staging tables to free space:
+
+```bash
+uv run python ingest.py cleanup
+```
+
+Check what's loaded:
+
+```bash
+uv run python ingest.py summary
+```
+
+Run the challenge queries (top 3 chemicals in East Central London):
+
+```bash
+uv run python ingest.py query
+```
+
+The scripts (`find_urls.py`, `ingest.py`) read connection details automatically from `~/deployment/deployment-exasol-*.json` and `~/deployment/secrets-exasol-*.json`.
+
 ## Troubleshooting
 
 - Codespace created before setting the secret? Rebuild it: `Cmd/Ctrl+Shift+P` → "Rebuild Container"
