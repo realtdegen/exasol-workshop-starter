@@ -1,10 +1,12 @@
 # Exasol Workshop Starter
 
-Open this repo in GitHub Codespaces to get started with AWS access.
+## Getting Started
 
-## For Participants
+### 1. Fork this repo
 
-### 1. Set the passphrase
+Click the **Fork** button at the top right of this page to create your own copy.
+
+### 2. Set the passphrase
 
 Your instructor will share the passphrase during the workshop.
 
@@ -13,23 +15,23 @@ Via the web UI:
 1. Go to [github.com/settings/codespaces](https://github.com/settings/codespaces) → New secret
 2. Name: `WORKSHOP_PASSPHRASE`
 3. Value: the passphrase from your instructor
-4. Repository access: select `alexeygrigorev/exasol-workshop-starter`
+4. Repository access: select your fork (`<your-username>/exasol-workshop-starter`)
 
 Or via the CLI:
 
 ```bash
-gh secret set WORKSHOP_PASSPHRASE --user --repos alexeygrigorev/exasol-workshop-starter --app codespaces
+gh secret set WORKSHOP_PASSPHRASE --user --repos <your-username>/exasol-workshop-starter --app codespaces
 # paste the passphrase when prompted
 ```
 
-### 2. Create a Codespace
+### 3. Create a Codespace
 
-Via the web UI: go to the repo page → Code → Codespaces → Create codespace on main
+Via the web UI: go to your fork → Code → Codespaces → Create codespace on main
 
 Or via the CLI:
 
 ```bash
-gh codespace create --repo alexeygrigorev/exasol-workshop-starter --branch main --machine basicLinux32gb
+gh codespace create --repo <your-username>/exasol-workshop-starter --branch main --machine basicLinux32gb
 gh codespace ssh  # or open in VS Code
 ```
 
@@ -38,6 +40,8 @@ AWS access is configured automatically. Verify:
 ```bash
 aws sts get-caller-identity
 ```
+
+Credentials refresh automatically in the background. No keys to manage.
 
 ### If it didn't work
 
@@ -52,8 +56,6 @@ Enter the passphrase when prompted. Then open a new terminal or run `source ~/.b
 
 ### Troubleshooting
 
-- **Codespace created before setting the secret?** Rebuild it: `Cmd/Ctrl+Shift+P` → "Rebuild Container"
-- **"Wrong passphrase"?** Double-check with your instructor
-- **Permission errors on AWS?** Ask your instructor — the role may need updated permissions
-
-Credentials refresh automatically in the background. No keys to manage.
+- Codespace created before setting the secret? Rebuild it: `Cmd/Ctrl+Shift+P` → "Rebuild Container"
+- "Wrong passphrase"? Double-check with your instructor
+- Permission errors on AWS? Ask your instructor — the role may need updated permissions
