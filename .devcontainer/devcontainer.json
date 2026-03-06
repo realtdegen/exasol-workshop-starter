@@ -2,8 +2,8 @@
   "name": "Exasol Workshop",
   "image": "mcr.microsoft.com/devcontainers/universal:2",
   "containerEnv": {
-    "WORKSHOP_CRED_URL": "PLACEHOLDER_URL",
-    "WORKSHOP_TOKEN_ENC": "PLACEHOLDER_ENCRYPTED_TOKEN"
+    "WORKSHOP_CRED_URL": "https://example.lambda-url.us-east-1.on.aws/",
+    "WORKSHOP_TOKEN_ENC": "U2FsdGVkX18OGT2lt86s/23hObwB6ymUq/xHfAG4a30="
   },
   "postCreateCommand": "bash .devcontainer/setup-aws.sh"
 }
