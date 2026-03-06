@@ -2,24 +2,93 @@
 
 ## Setting Up Exasol
 
-### Deploy Exasol Personal Edition
+### Install the Exasol CLI
 
-The `exasol` CLI is pre-installed in the Codespace. Create a deployment directory and run the installer:
+The `exasol` CLI is pre-installed in the Codespace. If you're not using Codespaces, install it manually:
 
 ```bash
-export AWS_DEFAULT_REGION=eu-west-1
-mkdir -p ~/deployment && cd ~/deployment
+mkdir -p ~/bin
+curl https://downloads.exasol.com/exasol-personal/installer.sh | bash
+mv exasol ~/bin/
+```
+
+Or download it from the [Exasol Personal Edition page](https://downloads.exasol.com/exasol-personal) and place it in `~/bin/`.
+
+### Deploy Exasol Personal Edition
+
+Create a deployment directory and run the installer:
+
+```bash
+export AWS_DEFAULT_REGION=eu-central-1
+mkdir deployment
+cd deployment
 exasol install
 ```
 
-Accept the EULA when prompted. The deployment takes 10-20 minutes. It provisions an EC2 instance with Exasol database installed.
+Accept the EULA when prompted. The deployment takes 7-10 minutes.
+
+All `exasol` commands must be run from within the deployment directory.
+
+#### Default settings
+
+This deploys a single-node cluster with sensible defaults:
+- 1 node
+- Instance type: `r6i.xlarge` (4 vCPUs, 32 GB RAM)
+
+#### Custom install
+
+To customize cluster size or instance type:
+
+```bash
+exasol install --cluster-size 3 --instance-type r6i.2xlarge
+```
+
+Available instance types:
+
+| Instance Type | vCPUs | RAM    | Use Case              |
+|---------------|-------|--------|-----------------------|
+| r6i.xlarge    | 4     | 32 GB  | Default, getting started |
+| r6i.2xlarge   | 8     | 64 GB  | Larger workloads      |
+| r6i.4xlarge   | 16    | 128 GB | High performance      |
+
+#### What happens during deployment
+
+The `exasol install` command:
+
+1. Generates Terraform files in the deployment directory
+2. Provisions AWS infrastructure (VPC, EC2, security groups, etc.)
+3. Starts up the infrastructure
+4. Downloads and installs Exasol Personal on the EC2 instance
+
+If the deployment process is interrupted, EC2 instances may continue to accrue costs. Check the AWS console and manually terminate any orphaned instances.
+
+#### Completion
+
+When the deployment finishes, you will see:
+
+- Connection details for the database
+- Exasol Admin URL
+- SSH access information
+- Where to find passwords (`secrets-exasol-<id>.json`)
+
+#### .gitignore
+
+If you're working in a git repo, add these to `.gitignore` to prevent committing sensitive files:
+
+```gitignore
+deployment/secrets-*.json
+deployment/*.pem
+deployment/terraform.tfstate
+deployment/.terraform/
+deployment/tofu
+deployment/.workflowState.json
+```
 
 ### Check the status
 
 Once the deployment finishes, check that the database is running:
 
 ```bash
-cd ~/deployment
 exasol status
 ```
 
@@ -33,8 +102,12 @@ exasol info
 
 This shows the host, port, and password for your Exasol instance. The connection details are also saved in:
 
-- `~/deployment/deployment-exasol-<id>.json` - host, port, DNS name
-- `~/deployment/secrets-exasol-<id>.json` - database username and password
+- `deployment-exasol-<id>.json` - host, port, DNS name
+- `secrets-exasol-<id>.json` - database and admin UI passwords
+- `exasol-<id>.pem` - SSH private key for EC2 access
+- `terraform.tfstate` - Terraform state (tracks AWS resources)
+
+The scripts in `code/` read these files automatically to connect to the database.
 
 ### Connect to the database
 
@@ -52,19 +125,37 @@ SELECT 'Hello, Exasol!' AS greeting;
 
 Type `quit` or press `Ctrl+D` to exit.
 
+### Get connection details for VS Code
+
+If you're not using the Codespace (where `code/` is already set up), download the script:
+
+```bash
+mkdir -p code && cd code
+uv init
+wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/code/connection_info.py
+```
+
+Run it:
+
+```bash
+uv run python connection_info.py
+```
+
+This prints everything you need: host, port, username, password, and the TLS certificate fingerprint.
+
+When connecting from VS Code, use "Fingerprint (pin certificate)" for TLS validation and paste the fingerprint from the output.
+
 ### Stopping and resuming
 
 Stop the instance when you're not using it (to save costs):
 
 ```bash
-cd ~/deployment
 exasol stop
 ```
 
 Resume later:
 
 ```bash
-cd ~/deployment
 exasol start
 exasol info    # IPs change after restart
 ```
@@ -74,11 +165,17 @@ exasol info    # IPs change after restart
 When you're completely done with the workshop:
 
 ```bash
-cd ~/deployment
 exasol destroy
 ```
 
 This terminates the EC2 instance and cleans up all AWS resources.
+
+### Additional help
+
+```bash
+exasol help
+exasol install --help
+```
 
 ## Loading NHS Prescription Data
 
