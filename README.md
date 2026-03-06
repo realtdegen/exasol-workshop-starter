@@ -43,19 +43,61 @@ aws sts get-caller-identity
 
 Credentials refresh automatically in the background. No keys to manage.
 
-### If it didn't work
-
-If you created the Codespace before setting the secret, either rebuild it
-(`Cmd/Ctrl+Shift+P` → "Rebuild Container") or run manually:
+### 4. Install the Exasol Launcher
 
 ```bash
-bash .devcontainer/setup-aws.sh
+curl https://downloads.exasol.com/exasol-personal/installer.sh | bash
 ```
 
-Enter the passphrase when prompted. Then open a new terminal or run `source ~/.bashrc`.
+This downloads the `exasol` binary to your home directory.
 
-### Troubleshooting
+### 5. Deploy Exasol Personal Edition
+
+```bash
+export AWS_DEFAULT_REGION=eu-west-1
+mkdir -p ~/deployment && cd ~/deployment
+~/exasol install
+```
+
+Accept the EULA when prompted. The deployment takes 10-20 minutes. It provisions an EC2 instance with Exasol installed.
+
+### 6. Check status and connect
+
+```bash
+cd ~/deployment
+~/exasol status
+~/exasol info       # shows connection details (host, port, password)
+~/exasol connect    # opens built-in SQL client
+```
+
+### 7. When you're done
+
+Stop the instance to save costs:
+
+```bash
+cd ~/deployment
+~/exasol stop
+```
+
+To resume later:
+
+```bash
+cd ~/deployment
+~/exasol start
+~/exasol info    # IPs change after restart
+```
+
+To destroy everything:
+
+```bash
+cd ~/deployment
+~/exasol destroy
+```
+
+## Troubleshooting
 
 - Codespace created before setting the secret? Rebuild it: `Cmd/Ctrl+Shift+P` → "Rebuild Container"
 - "Wrong passphrase"? Double-check with your instructor
 - Permission errors on AWS? Ask your instructor — the role may need updated permissions
+- `exasol install` fails? Make sure `aws sts get-caller-identity` works first
+- Lock file error? Remove `~/deployment/.exasolLock.json` and retry
