@@ -1147,9 +1147,11 @@ curl -u "admin@kestra.io:Admin1234!" \
   -X POST http://localhost:8080/api/v1/executions/prescriptions/load_all
 ```
 
-Loading all 101 months takes a while (~30 minutes depending on network and instance size), but you can monitor progress in the UI - each month shows as a separate iteration in the ForEach task, and each stage within that iteration is a separate step with its own logs.
+Loading all 101 months takes about 30 minutes with 4 concurrent threads. You can monitor progress in the UI - each month shows as a separate iteration in the ForEach task, and each stage within that iteration is a separate step with its own logs.
 
-Since all our scripts are idempotent, if the flow fails partway through (e.g. network timeout), you can re-run it safely. Already-loaded months will be overwritten with identical data.
+Why `concurrencyLimit: 4`? The Exasol Community Edition allows only 5 parallel connections. Each month runs its pipelines sequentially (one connection at a time), so 4 concurrent months use 4 connections — safely within the limit.
+
+Some months may fail due to unavailable source URLs (a few older months link to servers that are no longer online). The flow continues past failures — you'll see failed months marked in the UI, but the rest will keep loading. Since all our scripts are idempotent, you can re-run the flow safely. Already-loaded months will be overwritten with identical data.
 
 
 ## Managing the cluster
