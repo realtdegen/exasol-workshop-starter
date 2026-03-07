@@ -19,6 +19,10 @@ tasks:
       period: "{{inputs.period}}"
     wait: true
     allowFailure: true
+    retry:
+      type: constant
+      maxAttempt: 3
+      interval: PT10S
 
   - id: chem
     type: io.kestra.plugin.core.flow.Subflow
@@ -28,6 +32,10 @@ tasks:
       period: "{{inputs.period}}"
     wait: true
     allowFailure: true
+    retry:
+      type: constant
+      maxAttempt: 3
+      interval: PT10S
 
   - id: pdpi
     type: io.kestra.plugin.core.flow.Subflow
@@ -37,3 +45,7 @@ tasks:
       period: "{{inputs.period}}"
     wait: true
     allowFailure: true
+    retry:
+      type: constant
+      maxAttempt: 3
+      interval: PT10S
