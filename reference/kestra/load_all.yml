@@ -43,7 +43,6 @@ tasks:
         inputs:
           period: "{{taskrun.value}}"
         wait: true
-        transmitFailed: true
 
   - id: check
     type: io.kestra.plugin.scripts.python.Commands
