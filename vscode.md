@@ -16,7 +16,7 @@ If you're not using the Codespace (where `code/` is already set up), download th
 ```bash
 mkdir -p code && cd code
 uv init
-wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/code/connection_info.py
+wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference/connection_info.py
 ```
 
 Run it:

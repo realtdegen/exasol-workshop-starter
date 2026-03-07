@@ -200,14 +200,14 @@ The columns are: PERIOD, PRACTICE_CODE, PRACTICE_NAME, ADDRESS_1, ADDRESS_2, ADD
 
 Our goal is to get a clean table like this:
 
-| PERIOD | PRACTICE_CODE | PRACTICE_NAME | ADDRESS_1 | ADDRESS_2 | ADDRESS_3 | COUNTY | POSTCODE |
-|--------|---------------|---------------|-----------|-----------|-----------|--------|----------|
-| 201008 | A81001 | THE DENSHAM SURGERY | THE HEALTH CENTRE | LAWSON STREET | STOCKTON | CLEVELAND | TS18 1HU |
-| 201008 | A81002 | QUEENS PARK MEDICAL CENTRE | QUEENS PARK MEDICAL CTR | FARRER STREET | STOCKTON ON TEES | CLEVELAND | TS18 2AW |
+| PERIOD | PRACTICE_CODE | PRACTICE_NAME | ADDRESS | COUNTY | POSTCODE |
+|--------|---------------|---------------|---------|--------|----------|
+| 201008 | A81001 | THE DENSHAM SURGERY | THE HEALTH CENTRE, LAWSON STREET, STOCKTON | CLEVELAND | TS18 1HU |
+| 201008 | A81002 | QUEENS PARK MEDICAL CENTRE | QUEENS PARK MEDICAL CTR, FARRER STREET, STOCKTON ON TEES | CLEVELAND | TS18 2AW |
 
 - Each row is a GP practice with its address and postcode
 - The PRACTICE_CODE is the key that links to the PRACTICE field in PDPI, so we can join them to answer geographic questions (e.g. prescriptions in a specific postcode area)
-- To get there we need to TRIM the space-padded values and drop the extra empty column
+- To get there we need to TRIM the space-padded values, combine the three address fields into one, and drop the extra empty column
 
 ### Manual loading
 
@@ -318,9 +318,15 @@ Insert with TRIM to strip the padding:
 
 ```sql
 INSERT INTO STG_ADDR_201008
-SELECT '201008', TRIM(PRACTICE_CODE), TRIM(PRACTICE_NAME),
-       TRIM(ADDRESS_1), TRIM(ADDRESS_2), TRIM(ADDRESS_3),
-       TRIM(COUNTY), TRIM(POSTCODE)
+SELECT
+    '201008',
+    TRIM(PRACTICE_CODE),
+    TRIM(PRACTICE_NAME),
+    TRIM(ADDRESS_1),
+    TRIM(ADDRESS_2),
+    TRIM(ADDRESS_3),
+    TRIM(COUNTY),
+    TRIM(POSTCODE)
 FROM STG_RAW_ADDR_201008;
 ```
 
@@ -348,6 +354,56 @@ Verify the clean data:
 
 ```sql
 SELECT * FROM STG_ADDR_201008 LIMIT 5;
+```
+
+Now we create a processed table that combines the three address fields into one and is ready for the warehouse. The original ADDRESS_1, ADDRESS_2, and ADDRESS_3 don't have a consistent meaning (sometimes ADDRESS_1 is a building name, sometimes a street number) so keeping them separate would confuse analysts. We join the non-empty parts with `, `. In Exasol, empty strings are NULL, so we use `IS NOT NULL` to check:
+
+```sql
+CREATE TABLE STG_PROCESSED_ADDR_201008 (
+    PERIOD VARCHAR(6),
+    PRACTICE_CODE VARCHAR(20),
+    PRACTICE_NAME VARCHAR(200),
+    ADDRESS VARCHAR(600),
+    COUNTY VARCHAR(200),
+    POSTCODE VARCHAR(20)
+);
+```
+
+Single line:
+
+```sql
+CREATE TABLE STG_PROCESSED_ADDR_201008 (PERIOD VARCHAR(6), PRACTICE_CODE VARCHAR(20), PRACTICE_NAME VARCHAR(200), ADDRESS VARCHAR(600), COUNTY VARCHAR(200), POSTCODE VARCHAR(20));
+```
+
+Concatenate the address fields. In Exasol, empty strings are NULL, so we use `COALESCE` to turn NULLs into empty strings. `REPLACE` cleans up double commas from missing fields, and `TRIM` removes leftover commas from the edges:
+
+```sql
+INSERT INTO STG_PROCESSED_ADDR_201008
+SELECT
+    PERIOD,
+    PRACTICE_CODE,
+    PRACTICE_NAME,
+    TRIM(BOTH ', ' FROM REPLACE(
+        COALESCE(ADDRESS_1, '') || ', ' ||
+        COALESCE(ADDRESS_2, '') || ', ' ||
+        COALESCE(ADDRESS_3, ''),
+        ', , ', ', '
+    )) AS ADDRESS,
+    COUNTY,
+    POSTCODE
+FROM STG_ADDR_201008;
+```
+
+Single line:
+
+```sql
+INSERT INTO STG_PROCESSED_ADDR_201008 SELECT PERIOD, PRACTICE_CODE, PRACTICE_NAME, TRIM(BOTH ', ' FROM REPLACE(COALESCE(ADDRESS_1, '') || ', ' || COALESCE(ADDRESS_2, '') || ', ' || COALESCE(ADDRESS_3, ''), ', , ', ', ')) AS ADDRESS, COUNTY, POSTCODE FROM STG_ADDR_201008;
+```
+
+Verify the combined address:
+
+```sql
+SELECT * FROM STG_PROCESSED_ADDR_201008 LIMIT 5;
 ```
 
 ### CHEM - chemical substances (dimension)
@@ -465,7 +521,10 @@ Insert with TRIM:
 
 ```sql
 INSERT INTO STG_CHEM_201008
-SELECT TRIM(CHEM_SUB), TRIM(NAME), '201008'
+SELECT
+    TRIM(CHEM_SUB),
+    TRIM(NAME),
+    '201008'
 FROM STG_RAW_CHEM_201008;
 ```
 
@@ -631,8 +690,17 @@ Insert with TRIM:
 
 ```sql
 INSERT INTO STG_PDPI_201008
-SELECT TRIM(SHA), TRIM(PCT), TRIM(PRACTICE), TRIM(BNF_CODE), TRIM(BNF_NAME),
-       ITEMS, NIC, ACT_COST, QUANTITY, '201008'
+SELECT
+    TRIM(SHA),
+    TRIM(PCT),
+    TRIM(PRACTICE),
+    TRIM(BNF_CODE),
+    TRIM(BNF_NAME),
+    ITEMS,
+    NIC,
+    ACT_COST,
+    QUANTITY,
+    '201008'
 FROM STG_RAW_PDPI_201008;
 ```
 
@@ -656,81 +724,127 @@ SELECT * FROM STG_PDPI_201008 LIMIT 5;
 
 ## Manual data warehouse load
 
-Now that we have clean staging tables, let's create the final data warehouse tables in a separate schema. We use `PRESCRIPTIONS_UK` for the final tables - keeping them separate from `PRESCRIPTIONS_UK_STAGING` so analysts get a clean schema with only the tables they need:
+Now that we have clean staging tables, let's create the final data warehouse tables that analysts will actually query. We put them in a separate schema `PRESCRIPTIONS_UK` so analysts get a clean namespace with only the tables they need, without the staging clutter.
+
+We want the load to be idempotent - safe to re-run at any time without duplicating data. When we later automate this with a workflow orchestrator, any step should be safely retryable.
+
+The approach differs between facts and dimensions:
+
+- The fact table (PRESCRIPTION) uses DELETE + INSERT per period. We first delete any existing rows for that month, then insert from staging. This prevents duplicating millions of rows on a re-run. The DELETE is a no-op on the first run.
+- Dimension tables (PRACTICE, CHEMICAL) keep one row per entity. We use MERGE to insert new entities and update existing ones when the incoming period is newer. The PERIOD column tracks when each row was last updated - not a snapshot, just "this is the most recent data we have for this entity". We don't know yet whether dimensions actually change between months (e.g. does a practice move to a new address?) - we need to load all the data and analyze it first.
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS PRESCRIPTIONS_UK;
 ```
 
-The PRACTICE dimension table, built from the ADDR staging data:
+The PRACTICE dimension table maps directly from the clean staging data. The address concatenation was already done in the staging step, so the MERGE is straightforward:
 
 ```sql
-CREATE TABLE PRESCRIPTIONS_UK.PRACTICE (
+CREATE TABLE IF NOT EXISTS PRESCRIPTIONS_UK.PRACTICE (
     PRACTICE_CODE VARCHAR(20),
     PRACTICE_NAME VARCHAR(200),
-    ADDRESS_1 VARCHAR(200),
-    ADDRESS_2 VARCHAR(200),
-    ADDRESS_3 VARCHAR(200),
+    ADDRESS VARCHAR(600),
     COUNTY VARCHAR(200),
-    POSTCODE VARCHAR(20)
+    POSTCODE VARCHAR(20),
+    PERIOD VARCHAR(6)
 );
 ```
 
 Single line:
 
 ```sql
-CREATE TABLE PRESCRIPTIONS_UK.PRACTICE (PRACTICE_CODE VARCHAR(20), PRACTICE_NAME VARCHAR(200), ADDRESS_1 VARCHAR(200), ADDRESS_2 VARCHAR(200), ADDRESS_3 VARCHAR(200), COUNTY VARCHAR(200), POSTCODE VARCHAR(20));
+CREATE TABLE IF NOT EXISTS PRESCRIPTIONS_UK.PRACTICE (PRACTICE_CODE VARCHAR(20), PRACTICE_NAME VARCHAR(200), ADDRESS VARCHAR(600), COUNTY VARCHAR(200), POSTCODE VARCHAR(20), PERIOD VARCHAR(6));
 ```
 
-Populate it from the staging table:
+MERGE inserts new practices and updates existing ones. The PERIOD column tracks which month the data came from. Exasol doesn't support conditions on WHEN MATCHED, so we use CASE in the SET clause to only overwrite when the incoming period is newer or equal - otherwise the existing values are kept:
 
 ```sql
-INSERT INTO PRESCRIPTIONS_UK.PRACTICE
-SELECT PRACTICE_CODE, PRACTICE_NAME, ADDRESS_1, ADDRESS_2, ADDRESS_3, COUNTY, POSTCODE
-FROM PRESCRIPTIONS_UK_STAGING.STG_ADDR_201008;
+MERGE INTO PRESCRIPTIONS_UK.PRACTICE tgt
+USING PRESCRIPTIONS_UK_STAGING.STG_PROCESSED_ADDR_201008 src
+ON tgt.PRACTICE_CODE = src.PRACTICE_CODE
+WHEN MATCHED THEN UPDATE SET
+    tgt.PRACTICE_NAME = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.PRACTICE_NAME ELSE tgt.PRACTICE_NAME END,
+    tgt.ADDRESS = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.ADDRESS ELSE tgt.ADDRESS END,
+    tgt.COUNTY = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.COUNTY ELSE tgt.COUNTY END,
+    tgt.POSTCODE = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.POSTCODE ELSE tgt.POSTCODE END,
+    tgt.PERIOD = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.PERIOD ELSE tgt.PERIOD END
+WHEN NOT MATCHED THEN INSERT VALUES (
+    src.PRACTICE_CODE, src.PRACTICE_NAME, src.ADDRESS,
+    src.COUNTY, src.POSTCODE, src.PERIOD
+);
 ```
 
 Single line:
 
 ```sql
-INSERT INTO PRESCRIPTIONS_UK.PRACTICE SELECT PRACTICE_CODE, PRACTICE_NAME, ADDRESS_1, ADDRESS_2, ADDRESS_3, COUNTY, POSTCODE FROM PRESCRIPTIONS_UK_STAGING.STG_ADDR_201008;
+MERGE INTO PRESCRIPTIONS_UK.PRACTICE tgt USING PRESCRIPTIONS_UK_STAGING.STG_PROCESSED_ADDR_201008 src ON tgt.PRACTICE_CODE = src.PRACTICE_CODE WHEN MATCHED THEN UPDATE SET tgt.PRACTICE_NAME = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.PRACTICE_NAME ELSE tgt.PRACTICE_NAME END, tgt.ADDRESS = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.ADDRESS ELSE tgt.ADDRESS END, tgt.COUNTY = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.COUNTY ELSE tgt.COUNTY END, tgt.POSTCODE = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.POSTCODE ELSE tgt.POSTCODE END, tgt.PERIOD = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.PERIOD ELSE tgt.PERIOD END WHEN NOT MATCHED THEN INSERT VALUES (src.PRACTICE_CODE, src.PRACTICE_NAME, src.ADDRESS, src.COUNTY, src.POSTCODE, src.PERIOD);
 ```
 
-The CHEMICAL dimension table, built from the CHEM staging data:
+Check the rows the address concatenation:
 
 ```sql
-CREATE TABLE PRESCRIPTIONS_UK.CHEMICAL (
+SELECT * FROM PRESCRIPTIONS_UK.PRACTICE LIMIT 5;
+```
+
+The CHEMICAL dimension table is built from the CHEM staging data. We rename the cryptic CSV column names to something meaningful:
+
+- CHEM_SUB becomes CHEMICAL_CODE
+- NAME becomes CHEMICAL_NAME
+
+```sql
+CREATE TABLE IF NOT EXISTS PRESCRIPTIONS_UK.CHEMICAL (
     CHEMICAL_CODE VARCHAR(15),
-    CHEMICAL_NAME VARCHAR(200)
+    CHEMICAL_NAME VARCHAR(200),
+    PERIOD VARCHAR(6)
 );
 ```
 
 Single line:
 
 ```sql
-CREATE TABLE PRESCRIPTIONS_UK.CHEMICAL (CHEMICAL_CODE VARCHAR(15), CHEMICAL_NAME VARCHAR(200));
+CREATE TABLE IF NOT EXISTS PRESCRIPTIONS_UK.CHEMICAL (CHEMICAL_CODE VARCHAR(15), CHEMICAL_NAME VARCHAR(200), PERIOD VARCHAR(6));
 ```
 
-Populate it:
+Same MERGE pattern - insert new chemicals, update existing ones if the period is newer:
 
 ```sql
-INSERT INTO PRESCRIPTIONS_UK.CHEMICAL
-SELECT CHEM_SUB, NAME
-FROM PRESCRIPTIONS_UK_STAGING.STG_CHEM_201008;
+MERGE INTO PRESCRIPTIONS_UK.CHEMICAL tgt
+USING (
+    SELECT
+        CHEM_SUB,
+        NAME,
+        PERIOD
+    FROM PRESCRIPTIONS_UK_STAGING.STG_CHEM_201008
+) src ON tgt.CHEMICAL_CODE = src.CHEM_SUB
+WHEN MATCHED THEN UPDATE SET
+    tgt.CHEMICAL_NAME = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.NAME ELSE tgt.CHEMICAL_NAME END,
+    tgt.PERIOD = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.PERIOD ELSE tgt.PERIOD END
+WHEN NOT MATCHED THEN INSERT VALUES (
+    src.CHEM_SUB, src.NAME, src.PERIOD
+);
 ```
 
 Single line:
 
 ```sql
-INSERT INTO PRESCRIPTIONS_UK.CHEMICAL SELECT CHEM_SUB, NAME FROM PRESCRIPTIONS_UK_STAGING.STG_CHEM_201008;
+MERGE INTO PRESCRIPTIONS_UK.CHEMICAL tgt USING (SELECT CHEM_SUB, NAME, PERIOD FROM PRESCRIPTIONS_UK_STAGING.STG_CHEM_201008) src ON tgt.CHEMICAL_CODE = src.CHEM_SUB WHEN MATCHED THEN UPDATE SET tgt.CHEMICAL_NAME = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.NAME ELSE tgt.CHEMICAL_NAME END, tgt.PERIOD = CASE WHEN src.PERIOD >= tgt.PERIOD THEN src.PERIOD ELSE tgt.PERIOD END WHEN NOT MATCHED THEN INSERT VALUES (src.CHEM_SUB, src.NAME, src.PERIOD);
 ```
 
-The PRESCRIPTION fact table with the actual prescription records:
+Check the result:
 
 ```sql
-CREATE TABLE PRESCRIPTIONS_UK.PRESCRIPTION (
-    SHA VARCHAR(10),
-    PCT VARCHAR(10),
+SELECT * FROM PRESCRIPTIONS_UK.CHEMICAL LIMIT 5;
+```
+
+The PRESCRIPTION fact table is built from the PDPI staging data. We make these changes:
+
+- Drop SHA (Strategic Health Authority) and PCT (Primary Care Trust) - these are NHS organizational codes that aren't useful without their own lookup tables, which this dataset doesn't include. Analysts can't decode them, so they'd just add noise.
+- Rename PRACTICE to PRACTICE_CODE to match the dimension table and make the join obvious
+- Rename BNF_NAME to DRUG_NAME - "BNF" is NHS jargon (British National Formulary), "drug" is what analysts understand
+- Rename NIC (Net Ingredient Cost) and ACT_COST (Actual Cost) to NET_COST and ACTUAL_COST for clarity
+
+```sql
+CREATE TABLE IF NOT EXISTS PRESCRIPTIONS_UK.PRESCRIPTION (
     PRACTICE_CODE VARCHAR(20),
     BNF_CODE VARCHAR(15),
     DRUG_NAME VARCHAR(200),
@@ -745,92 +859,60 @@ CREATE TABLE PRESCRIPTIONS_UK.PRESCRIPTION (
 Single line:
 
 ```sql
-CREATE TABLE PRESCRIPTIONS_UK.PRESCRIPTION (SHA VARCHAR(10), PCT VARCHAR(10), PRACTICE_CODE VARCHAR(20), BNF_CODE VARCHAR(15), DRUG_NAME VARCHAR(200), ITEMS DECIMAL(18,0), NET_COST DECIMAL(18,2), ACTUAL_COST DECIMAL(18,2), QUANTITY DECIMAL(18,0), PERIOD VARCHAR(6));
+CREATE TABLE IF NOT EXISTS PRESCRIPTIONS_UK.PRESCRIPTION (PRACTICE_CODE VARCHAR(20), BNF_CODE VARCHAR(15), DRUG_NAME VARCHAR(200), ITEMS DECIMAL(18,0), NET_COST DECIMAL(18,2), ACTUAL_COST DECIMAL(18,2), QUANTITY DECIMAL(18,0), PERIOD VARCHAR(6));
 ```
 
-Populate it from the PDPI staging table:
+Delete any existing rows for this period (no-op on first run, prevents duplicates on re-run):
+
+```sql
+DELETE FROM PRESCRIPTIONS_UK.PRESCRIPTION WHERE PERIOD = '201008';
+```
+
+Insert from staging:
 
 ```sql
 INSERT INTO PRESCRIPTIONS_UK.PRESCRIPTION
-SELECT SHA, PCT, PRACTICE, BNF_CODE, BNF_NAME, ITEMS, NIC, ACT_COST, QUANTITY, PERIOD
+SELECT
+    PRACTICE,
+    BNF_CODE,
+    BNF_NAME,
+    ITEMS,
+    NIC,
+    ACT_COST,
+    QUANTITY,
+    PERIOD
 FROM PRESCRIPTIONS_UK_STAGING.STG_PDPI_201008;
 ```
 
 Single line:
 
 ```sql
-INSERT INTO PRESCRIPTIONS_UK.PRESCRIPTION SELECT SHA, PCT, PRACTICE, BNF_CODE, BNF_NAME, ITEMS, NIC, ACT_COST, QUANTITY, PERIOD FROM PRESCRIPTIONS_UK_STAGING.STG_PDPI_201008;
+INSERT INTO PRESCRIPTIONS_UK.PRESCRIPTION SELECT PRACTICE, BNF_CODE, BNF_NAME, ITEMS, NIC, ACT_COST, QUANTITY, PERIOD FROM PRESCRIPTIONS_UK_STAGING.STG_PDPI_201008;
 ```
 
-Now let's switch to the final schema and verify the row counts:
+Check the result:
 
 ```sql
-OPEN SCHEMA PRESCRIPTIONS_UK;
+SELECT * FROM PRESCRIPTIONS_UK.PRESCRIPTION LIMIT 5;
 ```
 
-Check each table:
+This is a first draft of the warehouse design. For now we keep every monthly snapshot of each dimension, which is the safest starting point. Once we load all 101 months, we can analyze how the data actually changes over time - do practices move? How often do chemical names change? That analysis will tell us the best way to model dimensions (e.g. slowly changing dimensions Type 1 vs Type 2, or just keeping the latest snapshot). Design the model based on the data, not assumptions.
 
-```sql
-SELECT TO_CHAR(COUNT(*)) AS practices FROM PRACTICE;
-SELECT TO_CHAR(COUNT(*)) AS chemicals FROM CHEMICAL;
-SELECT TO_CHAR(COUNT(*)) AS prescriptions FROM PRESCRIPTION;
-```
+## Automated data load
 
-Try a query that joins all three tables - find the top 5 most prescribed chemicals:
-
-```sql
-SELECT c.CHEMICAL_NAME, SUM(rx.ITEMS) AS total_items
-FROM PRESCRIPTION rx
-JOIN CHEMICAL c ON SUBSTR(rx.BNF_CODE, 1, 9) = c.CHEMICAL_CODE
-GROUP BY c.CHEMICAL_NAME
-ORDER BY total_items DESC
-LIMIT 5;
-```
-
-Single line:
-
-```sql
-SELECT c.CHEMICAL_NAME, SUM(rx.ITEMS) AS total_items FROM PRESCRIPTION rx JOIN CHEMICAL c ON SUBSTR(rx.BNF_CODE, 1, 9) = c.CHEMICAL_CODE GROUP BY c.CHEMICAL_NAME ORDER BY total_items DESC LIMIT 5;
-```
-
-Exit the SQL client:
-
-```sql
-quit
-```
-
-### Format differences between months
-
-Some months use CRLF (`\r\n`) line endings, others use LF (`\n`) - this affects the `ROW SEPARATOR` in the IMPORT statement. You can check with `file`:
-
-```bash
-file data/pdpi_201008_sample.csv
-```
-
-This will show `CRLF line terminators` or just `ASCII text` (which means LF). The number of columns can also vary between months (some have extra padding columns).
-
-The `IMPORT` statement needs the row separator (`CRLF` or `LF`) and whether to skip a header row. These settings vary between files - some months use Windows-style line endings (`CRLF`), others use Unix (`LF`), and some have extra padding columns. The `detect_format.py` script figures this out by downloading just the first 4KB of a file using an HTTP Range request, then checking for `\r\n` vs `\n` to determine the row separator, counting commas to get the number of columns, and looking for known header names (like `SHA`, `PRACTICE`, `BNF CODE`) to detect whether the first row is a header:
-
-```bash
-cd ../code
-wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/code/detect_format.py
-uv run python detect_format.py --period 201008
-```
-
-Each month also has ADDR (practice addresses) and CHEM (chemical names) files that get loaded the same way. The Python script below automates this for all months, detects format differences, and trims whitespace.
+We loaded one month manually to understand the process. Now let's automate it - first with Python scripts, then with Kestra as a workflow orchestrator.
 
 ### Find available data URLs
 
 ```bash
 cd code
-uv init
 uv add requests beautifulsoup4
 ```
 
 Download the script and run it:
 
 ```bash
-wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/code/find_urls.py
+wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference/find_urls.py
 uv run python find_urls.py
 ```
 
@@ -840,7 +922,7 @@ This scrapes the [dataset page](https://www.data.gov.uk/dataset/176ae264-2484-4a
 
 ```bash
 uv add pyexasol
-wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/code/ingest.py
+wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference/ingest.py
 ```
 
 ### Stage data
