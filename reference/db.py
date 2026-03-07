@@ -1,7 +1,7 @@
 """
 Shared database utilities for NHS Prescribing Data ingestion.
 
-Provides connection management, CSV format detection, and import helpers.
+Provides connection management and import helpers.
 """
 
 import json
@@ -9,9 +9,9 @@ import ssl
 from dataclasses import dataclass
 
 import pyexasol
-import requests
 
 from connection_info import get_config
+from detect_format import detect_csv_format as _detect_csv_format
 
 STAGING_SCHEMA = "PRESCRIPTIONS_UK_STAGING"
 WAREHOUSE_SCHEMA = "PRESCRIPTIONS_UK"
@@ -46,27 +46,12 @@ class CsvFormat:
 
 def detect_csv_format(url, sample_size=4096):
     try:
-        resp = requests.get(url, headers={"Range": "bytes=0-{}".format(sample_size)}, timeout=30)
-        resp.raise_for_status()
-        sample = resp.content
-
-        row_sep = "CRLF" if b"\r\n" in sample[:100] else "LF"
-
-        lines = sample.split(b"\n")
-        first_line = lines[0].decode("utf-8", errors="ignore")
-        num_columns = len(first_line.split(","))
-
-        if len(lines) >= 2 and lines[1].strip():
-            second_line = lines[1].decode("utf-8", errors="ignore")
-            data_cols = len(second_line.split(","))
-            if data_cols != num_columns:
-                num_columns = data_cols
-
-        has_header = any(name in first_line.upper() for name in
-                         ["SHA", "PCT", "PRACTICE", "BNF CODE", "BNF NAME",
-                          "ITEMS", "NIC", "CHEM SUB", "ADDRESS"])
-
-        return CsvFormat(row_separator=row_sep, num_columns=num_columns, has_header=has_header)
+        result = _detect_csv_format(url, sample_size)
+        return CsvFormat(
+            row_separator=result["row_separator"],
+            num_columns=result["num_columns"],
+            has_header=result["has_header"],
+        )
     except Exception as e:
         print("  Format detection error: {}, using defaults".format(e))
         return CsvFormat(row_separator="CRLF", num_columns=10, has_header=True)

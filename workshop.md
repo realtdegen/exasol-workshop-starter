@@ -929,10 +929,13 @@ Download the shared module that handles DB connection, CSV format detection, and
 
 ```bash
 wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference/connection_info.py
+wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference/detect_format.py
 wget https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference/db.py
 ```
 
-This reuses `connection_info.py` to read deployment files and provides `connect()`, `detect_csv_format()`, `import_csv()`, and `get_url()` for the loader scripts.
+- `connection_info.py` reads the deployment files to get host, port, and credentials
+- `detect_format.py` detects CSV format (row separator, column count, header) by downloading a small sample
+- `db.py` ties them together and provides `connect()`, `import_csv()`, and `get_url()` for the loader scripts
 
 ### Load ADDR (practice addresses)
 
