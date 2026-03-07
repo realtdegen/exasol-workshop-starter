@@ -1091,16 +1091,16 @@ Save and Execute. You should see all three tasks complete.
 
 We already loaded one month manually. Now let's create a proper flow for it. Each loader script supports a `--step` argument that runs a single stage of the pipeline, so every stage (ingest raw CSV, trim whitespace, transform, warehouse load) becomes a separate step in the Kestra flow - visible in the UI with its own logs and status.
 
-Tasks in a Kestra `tasks` list run sequentially - each task waits for the previous one to finish. The three pipelines (ADDR, CHEM, PDPI) are independent of each other, but we run them sequentially because the Exasol Community Edition limits us to 5 parallel connections. When `load_all` runs 2 months concurrently, running the pipelines in parallel within each month would exceed that limit. Inside each pipeline, `Sequential` ensures stages run in order.
-
-The full flow definition is in [load_month.yml](reference/kestra/load_month.yml). It takes a `period` input (e.g. `201008`) and runs:
+Tasks in a Kestra `tasks` list run sequentially - each task waits for the previous one to finish. Each pipeline type has its own flow definition: [load_addr.yml](reference/kestra/load_addr.yml), [load_chem.yml](reference/kestra/load_chem.yml), and [load_pdpi.yml](reference/kestra/load_pdpi.yml). The [load_month.yml](reference/kestra/load_month.yml) flow calls them as subflows sequentially:
 
 ```
-addr: load_raw → trim → combine_address → merge
-→ chem: load_raw → trim → merge
-→ pdpi: load_raw → trim → insert
-→ check
+load_month(period)
+  ├─ load_addr(period)  →  load_raw → trim → combine_address → merge
+  ├─ load_chem(period)  →  load_raw → trim → merge
+  └─ load_pdpi(period)  →  load_raw → trim → insert
 ```
+
+Each subflow has `allowFailure: true` so if one pipeline fails (e.g. a source URL is down), the others still run. Each also has `retry` configured — on failure, Kestra retries up to 3 times with a 10-second pause (`PT10S` — ISO 8601 duration format, where `PT` means "period of time", e.g. `PT1M` = 1 minute, `PT10S` = 10 seconds).
 
 Note that `load_month` does not include `install_deps` or `find_urls` — those are run once by `load_all` before iterating over months.
 
