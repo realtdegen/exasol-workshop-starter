@@ -6,12 +6,11 @@ Provides connection management and import helpers.
 
 import json
 import ssl
-from dataclasses import dataclass
 
 import pyexasol
 
 from connection_info import get_config
-from detect_format import detect_csv_format as _detect_csv_format
+from detect_format import detect_csv_format
 
 STAGING_SCHEMA = "PRESCRIPTIONS_UK_STAGING"
 WAREHOUSE_SCHEMA = "PRESCRIPTIONS_UK"
@@ -31,30 +30,6 @@ def connect():
     conn.execute("CREATE SCHEMA IF NOT EXISTS {}".format(WAREHOUSE_SCHEMA))
     conn.execute("OPEN SCHEMA {}".format(STAGING_SCHEMA))
     return conn
-
-
-@dataclass
-class CsvFormat:
-    row_separator: str
-    num_columns: int
-    has_header: bool
-
-    @property
-    def skip(self):
-        return 1 if self.has_header else 0
-
-
-def detect_csv_format(url, sample_size=4096):
-    try:
-        result = _detect_csv_format(url, sample_size)
-        return CsvFormat(
-            row_separator=result["row_separator"],
-            num_columns=result["num_columns"],
-            has_header=result["has_header"],
-        )
-    except Exception as e:
-        print("  Format detection error: {}, using defaults".format(e))
-        return CsvFormat(row_separator="CRLF", num_columns=10, has_header=True)
 
 
 def import_csv(conn, table_name, csv_url, columns_def, fmt):

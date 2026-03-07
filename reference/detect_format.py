@@ -4,26 +4,38 @@ Detect CSV format for NHS Prescribing Data files.
 Downloads the first 4KB of a CSV file using an HTTP Range request
 and determines the row separator (CRLF or LF), number of columns,
 and whether the file has a header row.
-
-Usage:
-    uv run python detect_format.py <url>
-    uv run python detect_format.py --period 201008
 """
 
-import argparse
-import json
+from dataclasses import dataclass
 
 import requests
 
+HEADER_NAMES = ["SHA", "PCT", "PRACTICE", "BNF CODE", "BNF NAME",
+                "ITEMS", "NIC", "CHEM SUB", "ADDRESS"]
 
-def detect_csv_format(url, sample_size=4096):
+
+@dataclass
+class CsvFormat:
+    row_separator: str
+    num_columns: int
+    has_header: bool
+    skip: int
+
+
+def download_sample(url, sample_size=4096):
     resp = requests.get(url, headers={"Range": "bytes=0-{}".format(sample_size)}, timeout=30)
     resp.raise_for_status()
-    sample = resp.content
+    return resp.content
 
-    row_sep = "CRLF" if b"\r\n" in sample[:100] else "LF"
 
-    lines = sample.split(b"\n")
+def detect_row_separator(sample):
+    if b"\r\n" in sample[:100]:
+        return "CRLF"
+    else:
+        return "LF"
+
+
+def count_columns(lines):
     first_line = lines[0].decode("utf-8", errors="ignore")
     num_columns = len(first_line.split(","))
 
@@ -33,54 +45,35 @@ def detect_csv_format(url, sample_size=4096):
         if data_cols != num_columns:
             num_columns = data_cols
 
-    has_header = any(name in first_line.upper() for name in
-                     ["SHA", "PCT", "PRACTICE", "BNF CODE", "BNF NAME",
-                      "ITEMS", "NIC", "CHEM SUB", "ADDRESS"])
-
-    return {
-        "row_separator": row_sep,
-        "num_columns": num_columns,
-        "has_header": has_header,
-        "skip": 1 if has_header else 0,
-        "first_line": first_line.strip()[:120],
-    }
+    return num_columns
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Detect CSV format for NHS data files")
-    parser.add_argument("url", nargs="?", help="URL of a CSV file to check")
-    parser.add_argument("--period", help="Check all files for a period (e.g. 201008)")
-    args = parser.parse_args()
+def check_has_header(line):
+    upper_line = line.upper()
+    for name in HEADER_NAMES:
+        if name in upper_line:
+            return True
+    return False
 
-    if args.period:
-        with open("data/prescription_urls.json") as f:
-            data = json.load(f)
-        matches = [m for m in data["months"] if m["period"] == args.period]
-        if not matches:
-            print("Period {} not found".format(args.period))
-            return
-        month = matches[0]
-        for file_type in ["pdpi", "addr", "chem"]:
-            url = month[file_type]
-            if not url:
-                print("{}: no URL".format(file_type.upper()))
-                continue
-            print("{}:".format(file_type.upper()))
-            fmt = detect_csv_format(url)
-            print("  URL: {}".format(url.split("/")[-1]))
-            print("  Row separator: {}".format(fmt["row_separator"]))
-            print("  Columns: {}".format(fmt["num_columns"]))
-            print("  Has header: {}".format(fmt["has_header"]))
-            print("  Skip: {}".format(fmt["skip"]))
-            print("  First line: {}".format(fmt["first_line"]))
-            print()
-    elif args.url:
-        fmt = detect_csv_format(args.url)
-        for key, val in fmt.items():
-            print("{}: {}".format(key, val))
+
+def detect_csv_format(url, sample_size=4096):
+    sample = download_sample(url, sample_size)
+
+    lines = sample.split(b"\n")
+    first_line = lines[0].decode("utf-8", errors="ignore")
+
+    row_separator = detect_row_separator(sample)
+    num_columns = count_columns(lines)
+    has_header = check_has_header(first_line)
+
+    if has_header:
+        skip = 1
     else:
-        parser.print_help()
+        skip = 0
 
-
-if __name__ == "__main__":
-    main()
+    return CsvFormat(
+        row_separator=row_separator,
+        num_columns=num_columns,
+        has_header=has_header,
+        skip=skip,
+    )
