@@ -7,8 +7,8 @@
     "ghcr.io/devcontainers/features/sshd:1": {}
   },
   "containerEnv": {
-    "WORKSHOP_CRED_URL": "https://weodslf4pnizn5n7vgrbht4ydm0behwx.lambda-url.eu-central-1.on.aws/",
-    "WORKSHOP_TOKEN_ENC": "U2FsdGVkX1+dxD1Y3gSItD3vB5Yqmr13IYeEG5s/SvZcPe6n3ES5n75mDLVU1XBmLbpOZOsmLwcN055vqc+aKA==",
+    "WORKSHOP_CRED_URL": "https://dtw36rw7j2b6l7gxznzutjnzhm0hwbfs.lambda-url.eu-west-1.on.aws/",
+    "WORKSHOP_TOKEN_ENC": "U2FsdGVkX1/K0GiycOVIROMntzaV9GtGpzFgSN+vKHoQBElvnh7OiGLaGthxGb8K\nhVnH0bqd67P4zw8dwWbt5g==",
     "AWS_DEFAULT_REGION": "eu-central-1"
   },
   "postCreateCommand": "bash .devcontainer/setup-aws.sh"
