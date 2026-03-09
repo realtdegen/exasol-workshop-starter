@@ -164,17 +164,21 @@ wc -l data/addr_201008.csv
 
 About 10,263 lines.
 
+We need to know the line endings for the `ROW SEPARATOR` when loading into Exasol. `cat -A` makes invisible characters visible: `$` marks the end of each line (the `\n`), and `^M` represents a carriage return (`\r`). So `^M$` means CRLF (`\r\n`), while a plain `$` means LF only (`\n`).
+
+Since the lines are ~1000 bytes wide, use `tail -c 20` to see just the end:
+
 ```bash
-file data/addr_201008.csv
+head -1 data/addr_201008.csv | cat -A | tail -c 20
 ```
 
 Output:
 
 ```
-data/addr_201008.csv: CSV ASCII text
+                 ^M$
 ```
 
-No mention of CRLF, so this file uses LF (`\n`) line endings.
+CRLF line endings.
 
 The columns are: PERIOD, PRACTICE_CODE, PRACTICE_NAME, ADDRESS_1, ADDRESS_2, ADDRESS_3, COUNTY, POSTCODE.
 
@@ -223,14 +227,14 @@ The `exasol connect` terminal treats newlines as Enter, so multi-line SQL doesn'
 CREATE TABLE STG_RAW_ADDR_201008 (PERIOD VARCHAR(100), PRACTICE_CODE VARCHAR(100), PRACTICE_NAME VARCHAR(2000), ADDRESS_1 VARCHAR(2000), ADDRESS_2 VARCHAR(2000), ADDRESS_3 VARCHAR(2000), COUNTY VARCHAR(2000), POSTCODE VARCHAR(200), EXTRA_PADDING VARCHAR(2000));
 ```
 
-Now load the data. Exasol's `IMPORT FROM CSV AT` can fetch CSV files directly from HTTP URLs. The URL is split into a base (`AT`) and filename (`FILE`). We set the format based on what we found earlier - LF line endings and no header row (SKIP = 0):
+Now load the data. Exasol's `IMPORT FROM CSV AT` can fetch CSV files directly from HTTP URLs. The URL is split into a base (`AT`) and filename (`FILE`). We set the format based on what we found earlier - CRLF line endings and no header row (SKIP = 0):
 
 ```sql
 IMPORT INTO STG_RAW_ADDR_201008
 FROM CSV AT 'https://files.digital.nhs.uk/7D/F8A6AF'
 FILE 'T201008ADDR%20BNFT.CSV'
 COLUMN SEPARATOR = ','
-ROW SEPARATOR = 'LF'
+ROW SEPARATOR = 'CRLF'
 SKIP = 0
 ENCODING = 'UTF8';
 ```
@@ -238,7 +242,7 @@ ENCODING = 'UTF8';
 Single line:
 
 ```sql
-IMPORT INTO STG_RAW_ADDR_201008 FROM CSV AT 'https://files.digital.nhs.uk/7D/F8A6AF' FILE 'T201008ADDR%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'LF' SKIP = 0 ENCODING = 'UTF8';
+IMPORT INTO STG_RAW_ADDR_201008 FROM CSV AT 'https://files.digital.nhs.uk/7D/F8A6AF' FILE 'T201008ADDR%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'CRLF' SKIP = 0 ENCODING = 'UTF8';
 ```
 
 Check how many rows were loaded:
@@ -401,21 +405,21 @@ wc -l data/chem_201008.csv
 About 3,290 lines. Check the line endings:
 
 ```bash
-file data/chem_201008.csv
+head -1 data/chem_201008.csv | cat -A | tail -c 20
 ```
 
 Output:
 
 ```
-data/chem_201008.csv: ASCII text, with CRLF line terminators
+      201008,   ^M$
 ```
 
-Comparing with ADDR:
+CRLF, same as ADDR. Comparing with ADDR:
 
 - ADDR had no header row at all, while CHEM has a header - but it's unusual: the third column contains the period value `201008` instead of a column name
 - The data rows only have 2 values (code and name) plus a trailing comma
 - Same space-padding as ADDR
-- ADDR used LF line endings, but CHEM uses CRLF - so we'll need a different `ROW SEPARATOR` when loading
+- Same CRLF line endings as ADDR
 
 ### Loading CHEM into Exasol
 
@@ -546,16 +550,16 @@ Comparing with ADDR and CHEM:
 Check the line endings:
 
 ```bash
-file data/pdpi_201008_sample.csv
+head -1 data/pdpi_201008_sample.csv | cat -A | tail -c 20
 ```
 
 Output:
 
 ```
-data/pdpi_201008_sample.csv: CSV ASCII text
+                 ^M$
 ```
 
-LF line endings, same as ADDR.
+CRLF, same as ADDR and CHEM.
 
 - Each row is one prescription: which practice prescribed what drug (BNF CODE/NAME), how many items, the cost (NIC = net ingredient cost, ACT COST = actual cost), and the quantity dispensed
 - PRACTICE links to ADDR, the first 9 characters of BNF CODE link to CHEM SUB
@@ -565,7 +569,7 @@ LF line endings, same as ADDR.
 
 ### Loading PDPI into Exasol
 
-LF line endings, has header (SKIP = 1), 11 columns (including the trailing empty one). This one takes a minute or two since it's loading ~10M rows over the network:
+CRLF line endings, has header (SKIP = 1), 11 columns (including the trailing empty one). This one takes a minute or two since it's loading ~10M rows over the network:
 
 ```sql
 CREATE TABLE STG_RAW_PDPI_201008 (
@@ -596,7 +600,7 @@ IMPORT INTO STG_RAW_PDPI_201008
 FROM CSV AT 'https://files.digital.nhs.uk/B9/14BEAF'
 FILE 'T201008PDPI%20BNFT.CSV'
 COLUMN SEPARATOR = ','
-ROW SEPARATOR = 'LF'
+ROW SEPARATOR = 'CRLF'
 SKIP = 1
 ENCODING = 'UTF8';
 ```
@@ -604,7 +608,7 @@ ENCODING = 'UTF8';
 Single line:
 
 ```sql
-IMPORT INTO STG_RAW_PDPI_201008 FROM CSV AT 'https://files.digital.nhs.uk/B9/14BEAF' FILE 'T201008PDPI%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'LF' SKIP = 1 ENCODING = 'UTF8';
+IMPORT INTO STG_RAW_PDPI_201008 FROM CSV AT 'https://files.digital.nhs.uk/B9/14BEAF' FILE 'T201008PDPI%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'CRLF' SKIP = 1 ENCODING = 'UTF8';
 ```
 
 Check how many rows were loaded:
