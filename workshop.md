@@ -1072,12 +1072,6 @@ mkdir -p kestra
 wget ${PREFIX}/kestra/docker-compose.yml -O kestra/docker-compose.yml
 ```
 
-Kestra runs as root inside the container. To avoid permission issues with the `.venv` directory it creates, initialize it first:
-
-```bash
-uv sync
-```
-
 Now start Kestra:
 
 ```bash
@@ -1202,11 +1196,16 @@ curl -u "admin@kestra.io:Admin1234!" \
 
 Loading all 101 months takes about 30 minutes with 4 concurrent threads. You can monitor progress in the UI - each month shows as a separate iteration in the ForEach task, and each stage within that iteration is a separate step with its own logs.
 
-Why `concurrencyLimit: 4`? The Exasol Community Edition allows only 5 parallel connections. Each month runs its pipelines sequentially (one connection at a time), so 4 concurrent months use 4 connections — safely within the limit.
+Why `concurrencyLimit: 4`? The Exasol Community Edition allows only 5 parallel connections. Each month runs its pipelines sequentially (one connection at a time), so 4 concurrent months use 4 connections — leaving one connection free for querying while the load runs.
 
 Some months may fail due to unavailable source URLs (a few older months link to servers that are no longer online). The flow continues past failures — you'll see failed months marked in the UI, but the rest will keep loading. Since all our scripts are idempotent, you can re-run the flow safely. Already-loaded months will be overwritten with identical data.
 
 
+## Grafana dashboard
+
+While the data is loading, let's set up a Grafana dashboard to visualize the data. As more months load, you'll see the dashboard update with new data — a good way to monitor the load progress and start exploring the dataset visually.
+
+TODO
 
 
 ## Managing the cluster

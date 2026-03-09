@@ -33,6 +33,7 @@ services:
       - ../../:/workspace
       - ./flows:/kestra-flows
     environment:
+      UV_PROJECT_ENVIRONMENT: /tmp/kestra-venv
       KESTRA_CONFIGURATION: |
         micronaut:
           io:
