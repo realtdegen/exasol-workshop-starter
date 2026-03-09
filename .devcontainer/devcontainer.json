@@ -2,11 +2,11 @@
   "name": "Exasol Workshop",
   "build": {
     "dockerfile": "Dockerfile",
-  "hostRequirements": {
-    "cpus": 8,
-    "memory": "16gb",
-    "storage": "64gb"
-  }
+    "hostRequirements": {
+      "cpus": 8,
+      "memory": "16gb",
+      "storage": "64gb"
+    }
   },
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {},
@@ -15,11 +15,15 @@
   },
   "containerEnv": {
     "WORKSHOP_CRED_URL": "https://weodslf4pnizn5n7vgrbht4ydm0behwx.lambda-url.eu-central-1.on.aws/",
-    "WORKSHOP_TOKEN_ENC": "U2FsdGVkX1+T8wVyhKZBK6wfJNEluIe+Q1SSuZeOw2WQVjyNleiw0nlu1pph2YXenoqZ8H8UdkHuyqXY6y78Yg==",
+    "WORKSHOP_TOKEN_ENC": "U2FsdGVkX18zzJIew+0UuerL8xPkVLTDhYZ1vbOlfc8eT1bhFrUMMag3fORu7eEE4CrKt1oBpvSiqoJ19UdXhw==",
     "AWS_DEFAULT_REGION": "eu-central-1"
   },
   "postStartCommand": "bash .devcontainer/setup-aws.sh || true",
-  "forwardPorts": [3000, 8080, 8081],
+  "forwardPorts": [
+    3000,
+    8080,
+    8081
+  ],
   "customizations": {
     "vscode": {
       "settings": {},
