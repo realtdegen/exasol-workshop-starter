@@ -1030,21 +1030,23 @@ We have Python scripts that load one month at a time, but there are 101 months t
 
 ### Start Kestra
 
-The [docker-compose file](reference/kestra/docker-compose.yml) mounts the project root into the Kestra container at `/workspace`, so both `code/` and `deployment/` are available. Download it and start Kestra:
+The [docker-compose file](reference/kestra/docker-compose.yml) mounts the project root into the Kestra container at `/workspace`, so both `code/` and `deployment/` are available. Download it:
 
 ```bash
 cd code
 mkdir -p kestra
 wget ${PREFIX}/kestra/docker-compose.yml -O kestra/docker-compose.yml
-cd kestra
-docker compose up -d
 ```
 
 Kestra runs as root inside the container. To avoid permission issues with the `.venv` directory it creates, initialize it first:
 
 ```bash
-cd code
 uv sync
+```
+
+Now start Kestra:
+
+```bash
 cd kestra
 docker compose up -d
 ```
@@ -1096,7 +1098,16 @@ Save and Execute. You should see all three tasks complete.
 
 We already loaded one month manually. Now let's create a proper flow for it. Each loader script supports a `--step` argument that runs a single stage of the pipeline, so every stage (ingest raw CSV, trim whitespace, transform, warehouse load) becomes a separate step in the Kestra flow - visible in the UI with its own logs and status.
 
-Tasks in a Kestra `tasks` list run sequentially - each task waits for the previous one to finish. Each pipeline type has its own flow definition: [load_addr.yml](reference/kestra/load_addr.yml), [load_chem.yml](reference/kestra/load_chem.yml), and [load_pdpi.yml](reference/kestra/load_pdpi.yml). The [load_month.yml](reference/kestra/load_month.yml) flow calls them as subflows sequentially:
+Download the flow definitions:
+
+```bash
+wget ${PREFIX}/kestra/load_addr.yml -O kestra/load_addr.yml
+wget ${PREFIX}/kestra/load_chem.yml -O kestra/load_chem.yml
+wget ${PREFIX}/kestra/load_pdpi.yml -O kestra/load_pdpi.yml
+wget ${PREFIX}/kestra/load_month.yml -O kestra/load_month.yml
+```
+
+Each pipeline type has its own flow definition: [load_addr.yml](reference/kestra/load_addr.yml), [load_chem.yml](reference/kestra/load_chem.yml), and [load_pdpi.yml](reference/kestra/load_pdpi.yml). The [load_month.yml](reference/kestra/load_month.yml) flow calls them as subflows sequentially:
 
 ```
 load_month(period)
@@ -1105,7 +1116,7 @@ load_month(period)
   └─ load_pdpi(period)  →  load_raw → trim → insert
 ```
 
-Each subflow has `allowFailure: true` so if one pipeline fails (e.g. a source URL is down), the others still run. Each also has `retry` configured — on failure, Kestra retries up to 3 times with a 10-second pause (`PT10S` — ISO 8601 duration format, where `PT` means "period of time", e.g. `PT1M` = 1 minute, `PT10S` = 10 seconds).
+Tasks in a Kestra `tasks` list run sequentially - each task waits for the previous one to finish. Each subflow has `allowFailure: true` so if one pipeline fails (e.g. a source URL is down), the others still run. Each also has `retry` configured — on failure, Kestra retries up to 3 times with a 10-second pause (`PT10S` — ISO 8601 duration format, where `PT` means "period of time", e.g. `PT1M` = 1 minute, `PT10S` = 10 seconds).
 
 Note that `load_month` does not include `install_deps` or `find_urls` — those are run once by `load_all` before iterating over months.
 
@@ -1129,7 +1140,13 @@ curl -u "admin@kestra.io:Admin1234!" \
 
 ### Load all months
 
-Now that we have the `load_month` flow, we can reuse it. The [load_all.yml](reference/kestra/load_all.yml) flow uses `Subflow` to call `load_month` for each period - no need to duplicate the pipeline steps:
+Download the flow:
+
+```bash
+wget ${PREFIX}/kestra/load_all.yml -O kestra/load_all.yml
+```
+
+The [load_all.yml](reference/kestra/load_all.yml) flow reuses `load_month` via `Subflow` — no need to duplicate the pipeline steps:
 
 1. Installs dependencies and finds all available URLs
 2. Uses the Kestra Python library to extract the list of 101 periods

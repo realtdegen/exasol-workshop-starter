@@ -4,7 +4,8 @@
     "dockerfile": "Dockerfile"
   },
   "features": {
-    "ghcr.io/devcontainers/features/sshd:1": {}
+    "ghcr.io/devcontainers/features/sshd:1": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
   "containerEnv": {
     "WORKSHOP_CRED_URL": "https://weodslf4pnizn5n7vgrbht4ydm0behwx.lambda-url.eu-central-1.on.aws/",
