@@ -893,7 +893,9 @@ We loaded one month manually to understand the process. Now let's automate it - 
 ### Setup
 
 ```bash
+mkdir -p code
 cd code
+uv init
 uv add requests beautifulsoup4 pyexasol
 ```
 
