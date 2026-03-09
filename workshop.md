@@ -1,85 +1,6 @@
 # Exasol Workshop
 
-## Prerequisites
-
-### Install AWS CLI
-
-The AWS CLI is **not** pre-installed in the default GitHub Codespaces image. You need to install it before you can deploy Exasol or interact with AWS services.
-
-**In your Codespace terminal, run:**
-
-```bash
-# Update package list and install dependencies
-sudo apt-get update
-sudo apt-get install -y curl unzip
-
-# Download AWS CLI v2
-cd /tmp
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip -o awscliv2.zip
-sudo ./aws/install
-
-# Return to workspace
-cd /workspaces/aws-credentials-vending-machine
-
-# Verify installation
-aws --version
-```
-
-You should see output like `aws-cli/2.x.x Python/3.x.x Linux/x.x.x`.
-
-### Configure AWS Credentials
-
-Once the AWS CLI is installed, configure your workshop credentials:
-
-```bash
-aws configure --profile exasol-workshop
-```
-
-When prompted, enter:
-- **AWS Access Key ID**: (provided by instructor)
-- **AWS Secret Access Key**: (provided by instructor)
-- **Default region name**: `eu-central-1` (or as specified by instructor)
-- **Default output format**: `json` (press Enter for default)
-
-**Verify your credentials work:**
-
-```bash
-AWS_PROFILE=exasol-workshop aws sts get-caller-identity
-```
-
-You should see JSON output with your `Account`, `UserId`, and `Arn`. If this fails, contact the instructor.
-
-### Set Default Region (Optional)
-
-If you want to avoid typing `AWS_PROFILE=exasol-workshop` before every AWS command, you can set it as your default profile:
-
-```bash
-export AWS_PROFILE=exasol-workshop
-export AWS_DEFAULT_REGION=eu-central-1
-```
-
-Add these to your shell profile to persist across terminal sessions:
-
-```bash
-echo 'export AWS_PROFILE=exasol-workshop' >> ~/.bashrc
-echo 'export AWS_DEFAULT_REGION=eu-central-1' >> ~/.bashrc
-source ~/.bashrc
-```
-
 ## Setting Up Exasol
-
-### Install the Exasol CLI
-
-The `exasol` CLI is pre-installed in the Codespace. If you're not using Codespaces, install it manually:
-
-```bash
-mkdir -p ~/bin
-curl https://downloads.exasol.com/exasol-personal/installer.sh | bash
-mv exasol ~/bin/
-```
-
-Or download it from the [Exasol Personal Edition page](https://downloads.exasol.com/exasol-personal) and place it in `~/bin/` (or any other folder on the `PATH`).
 
 ### Deploy Exasol Personal Edition
 
@@ -132,44 +53,10 @@ deployment/.workflowState.json
 - `tofu` - OpenTofu binary (~90 MB)
 - `.workflowState.json` - internal workflow tracking
 
-### Check the status
 
-Once the deployment finishes, check that the database is running:
+## Exploring the Dataset
 
-```bash
-exasol status
-```
-
-You should see `database_ready` in the output.
-
-### Get connection details
-
-```bash
-exasol info
-```
-
-This shows the host, port, and password for your Exasol instance. The connection details are also saved in:
-
-- `deployment-exasol-<id>.json` - host, port, DNS name
-- `secrets-exasol-<id>.json` - database and admin UI passwords
-
-### Connect to the database
-
-Use the built-in SQL client:
-
-```bash
-exasol connect
-```
-
-Try a simple query:
-
-```sql
-SELECT 'Hello, Exasol!' AS greeting;
-```
-
-Type `quit` or press `Ctrl+D` to exit.
-
-## Loading NHS Prescription Data
+The deployment takes 7-10 minutes. While we wait, let's explore the data we'll be loading.
 
 We will load the [Prescribing by GP Practice](https://www.data.gov.uk/dataset/176ae264-2484-4afe-a297-d51798eb8228/prescribing-by-gp-practice-presentation-level) dataset published on data.gov.uk. This dataset contains monthly prescription records from GP practices across England from 2010 to 2018 - about 10 million rows per month, over 1 billion rows total.
 
@@ -243,17 +130,21 @@ wc -l data/addr_201008.csv
 
 About 10,263 lines.
 
+We need to know the line endings for the `ROW SEPARATOR` when loading into Exasol. `cat -A` makes invisible characters visible: `$` marks the end of each line (the `\n`), and `^M` represents a carriage return (`\r`). So `^M$` means CRLF (`\r\n`), while a plain `$` means LF only (`\n`).
+
+Since the lines are ~1000 bytes wide, use `tail -c 20` to see just the end:
+
 ```bash
-file data/addr_201008.csv
+head -1 data/addr_201008.csv | cat -A | tail -c 20
 ```
 
 Output:
 
 ```
-data/addr_201008.csv: CSV ASCII text
+                 ^M$
 ```
 
-No mention of CRLF, so this file uses LF (`\n`) line endings.
+CRLF line endings.
 
 The columns are: PERIOD, PRACTICE_CODE, PRACTICE_NAME, ADDRESS_1, ADDRESS_2, ADDRESS_3, COUNTY, POSTCODE.
 
@@ -261,190 +152,17 @@ The columns are: PERIOD, PRACTICE_CODE, PRACTICE_NAME, ADDRESS_1, ADDRESS_2, ADD
 - The PRACTICE_CODE is the key that links to the PRACTICE field in PDPI, so we can join them to answer geographic questions (e.g. prescriptions in a specific postcode area)
 - To get there we need to TRIM the space-padded values, combine the three address fields into one, and drop the extra empty column
 
-### Manual loading
-
-Let's load this first month manually with SQL to understand the process, then we'll automate it with Python.
-
-Connect to the database and create a schema:
+Add this to your notes:
 
 ```bash
-exasol connect
-```
-
-Create a staging schema. We call it "staging" because this is where we load the raw data before cleaning it up and moving it to the final tables:
-
-```sql
-CREATE SCHEMA IF NOT EXISTS PRESCRIPTIONS_UK_STAGING;
-OPEN SCHEMA PRESCRIPTIONS_UK_STAGING;
-```
-
-First, we need a table to hold the raw data. The column definitions must match the CSV exactly - including the extra empty column from the trailing comma:
-
-```sql
-CREATE TABLE STG_RAW_ADDR_201008 (
-    PERIOD VARCHAR(100),
-    PRACTICE_CODE VARCHAR(100),
-    PRACTICE_NAME VARCHAR(2000),
-    ADDRESS_1 VARCHAR(2000),
-    ADDRESS_2 VARCHAR(2000),
-    ADDRESS_3 VARCHAR(2000),
-    COUNTY VARCHAR(2000),
-    POSTCODE VARCHAR(200),
-    EXTRA_PADDING VARCHAR(2000)
-);
-```
-
-We use wide VARCHARs because the values are space-padded, and if the column is too narrow, the database will reject the import.
-
-The `exasol connect` terminal treats newlines as Enter, so multi-line SQL doesn't paste well. Here's the same statement as a single line you can copy-paste into the terminal (later we'll switch to Python where this won't be an issue):
-
-```sql
-CREATE TABLE STG_RAW_ADDR_201008 (PERIOD VARCHAR(100), PRACTICE_CODE VARCHAR(100), PRACTICE_NAME VARCHAR(2000), ADDRESS_1 VARCHAR(2000), ADDRESS_2 VARCHAR(2000), ADDRESS_3 VARCHAR(2000), COUNTY VARCHAR(2000), POSTCODE VARCHAR(200), EXTRA_PADDING VARCHAR(2000));
-```
-
-Now load the data. Exasol's `IMPORT FROM CSV AT` can fetch CSV files directly from HTTP URLs. The URL is split into a base (`AT`) and filename (`FILE`). We set the format based on what we found earlier - LF line endings and no header row (SKIP = 0):
-
-```sql
-IMPORT INTO STG_RAW_ADDR_201008
-FROM CSV AT 'https://files.digital.nhs.uk/7D/F8A6AF'
-FILE 'T201008ADDR%20BNFT.CSV'
-COLUMN SEPARATOR = ','
-ROW SEPARATOR = 'LF'
-SKIP = 0
-ENCODING = 'UTF8';
-```
-
-Single line:
-
-```sql
-IMPORT INTO STG_RAW_ADDR_201008 FROM CSV AT 'https://files.digital.nhs.uk/7D/F8A6AF' FILE 'T201008ADDR%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'LF' SKIP = 0 ENCODING = 'UTF8';
-```
-
-Check how many rows were loaded:
-
-```sql
-SELECT COUNT(*) FROM STG_RAW_ADDR_201008;
-```
-
-Check a few rows:
-
-```sql
-SELECT * FROM STG_RAW_ADDR_201008 LIMIT 5;
-```
-
-The terminal truncates the columns, so it's not obvious here, but the values are still heavily padded with spaces (as we saw in the raw CSV).
-
-We want to TRIM that padding and drop the useless EXTRA_PADDING column. This is the next step - moving the data from the raw table to a clean staging table:
-
-```sql
-CREATE TABLE STG_ADDR_201008 (
-    PERIOD VARCHAR(6),
-    PRACTICE_CODE VARCHAR(20),
-    PRACTICE_NAME VARCHAR(200),
-    ADDRESS_1 VARCHAR(200),
-    ADDRESS_2 VARCHAR(200),
-    ADDRESS_3 VARCHAR(200),
-    COUNTY VARCHAR(200),
-    POSTCODE VARCHAR(20)
-);
-```
-
-Single line:
-
-```sql
-CREATE TABLE STG_ADDR_201008 (PERIOD VARCHAR(6), PRACTICE_CODE VARCHAR(20), PRACTICE_NAME VARCHAR(200), ADDRESS_1 VARCHAR(200), ADDRESS_2 VARCHAR(200), ADDRESS_3 VARCHAR(200), COUNTY VARCHAR(200), POSTCODE VARCHAR(20));
-```
-
-Insert with TRIM to strip the padding:
-
-```sql
-INSERT INTO STG_ADDR_201008
-SELECT
-    '201008',
-    TRIM(PRACTICE_CODE),
-    TRIM(PRACTICE_NAME),
-    TRIM(ADDRESS_1),
-    TRIM(ADDRESS_2),
-    TRIM(ADDRESS_3),
-    TRIM(COUNTY),
-    TRIM(POSTCODE)
-FROM STG_RAW_ADDR_201008;
-```
-
-Single line:
-
-```sql
-INSERT INTO STG_ADDR_201008 SELECT '201008', TRIM(PRACTICE_CODE), TRIM(PRACTICE_NAME), TRIM(ADDRESS_1), TRIM(ADDRESS_2), TRIM(ADDRESS_3), TRIM(COUNTY), TRIM(POSTCODE) FROM STG_RAW_ADDR_201008;
-```
-
-To verify the padding is gone, compare the string lengths before and after:
-
-```sql
-SELECT LENGTH(r.PRACTICE_NAME) AS raw_len, LENGTH(s.PRACTICE_NAME) AS clean_len, s.PRACTICE_NAME FROM STG_RAW_ADDR_201008 r JOIN STG_ADDR_201008 s ON TRIM(r.PRACTICE_CODE) = s.PRACTICE_CODE LIMIT 5;
-```
-
-You should see that `raw_len` is much larger than `clean_len` (e.g. 40 vs 19) - that's all the space padding we removed.
-
-Drop the raw table:
-
-```sql
-DROP TABLE STG_RAW_ADDR_201008;
-```
-
-Verify the clean data:
-
-```sql
-SELECT * FROM STG_ADDR_201008 LIMIT 5;
-```
-
-Now we create a processed table that combines the three address fields into one and is ready for the warehouse. The original ADDRESS_1, ADDRESS_2, and ADDRESS_3 don't have a consistent meaning (sometimes ADDRESS_1 is a building name, sometimes a street number) so keeping them separate would confuse analysts. We join the non-empty parts with `, `. In Exasol, empty strings are NULL, so we use `IS NOT NULL` to check:
-
-```sql
-CREATE TABLE STG_PROCESSED_ADDR_201008 (
-    PERIOD VARCHAR(6),
-    PRACTICE_CODE VARCHAR(20),
-    PRACTICE_NAME VARCHAR(200),
-    ADDRESS VARCHAR(600),
-    COUNTY VARCHAR(200),
-    POSTCODE VARCHAR(20)
-);
-```
-
-Single line:
-
-```sql
-CREATE TABLE STG_PROCESSED_ADDR_201008 (PERIOD VARCHAR(6), PRACTICE_CODE VARCHAR(20), PRACTICE_NAME VARCHAR(200), ADDRESS VARCHAR(600), COUNTY VARCHAR(200), POSTCODE VARCHAR(20));
-```
-
-Concatenate the address fields. Use `COALESCE` to turn NULLs into empty strings. `REPLACE` cleans up double commas from missing fields, and `TRIM` removes leftover commas from the edges:
-
-```sql
-INSERT INTO STG_PROCESSED_ADDR_201008
-SELECT
-    PERIOD,
-    PRACTICE_CODE,
-    PRACTICE_NAME,
-    TRIM(BOTH ', ' FROM REPLACE(
-        COALESCE(ADDRESS_1, '') || ', ' ||
-        COALESCE(ADDRESS_2, '') || ', ' ||
-        COALESCE(ADDRESS_3, ''),
-        ', , ', ', '
-    )) AS ADDRESS,
-    COUNTY,
-    POSTCODE
-FROM STG_ADDR_201008;
-```
-
-Single line:
-
-```sql
-INSERT INTO STG_PROCESSED_ADDR_201008 SELECT PERIOD, PRACTICE_CODE, PRACTICE_NAME, TRIM(BOTH ', ' FROM REPLACE(COALESCE(ADDRESS_1, '') || ', ' || COALESCE(ADDRESS_2, '') || ', ' || COALESCE(ADDRESS_3, ''), ', , ', ', ')) AS ADDRESS, COUNTY, POSTCODE FROM STG_ADDR_201008;
-```
-
-Verify the combined address:
-
-```sql
-SELECT * FROM STG_PROCESSED_ADDR_201008 LIMIT 5;
+cat > data/notes.md << 'EOF'
+## ADDR (practice addresses)
+- No header row
+- CRLF line endings
+- ~10K rows per month
+- Values are space-padded, trailing comma creates an extra empty column
+- Columns: PERIOD, PRACTICE_CODE, PRACTICE_NAME, ADDRESS_1, ADDRESS_2, ADDRESS_3, COUNTY, POSTCODE
+EOF
 ```
 
 ### CHEM - chemical substances (dimension)
@@ -480,111 +198,34 @@ wc -l data/chem_201008.csv
 About 3,290 lines. Check the line endings:
 
 ```bash
-file data/chem_201008.csv
+head -1 data/chem_201008.csv | cat -A | tail -c 20
 ```
 
 Output:
 
 ```
-data/chem_201008.csv: ASCII text, with CRLF line terminators
+      201008,   ^M$
 ```
 
-Comparing with ADDR:
+CRLF, same as ADDR. Comparing with ADDR:
 
 - ADDR had no header row at all, while CHEM has a header - but it's unusual: the third column contains the period value `201008` instead of a column name
 - The data rows only have 2 values (code and name) plus a trailing comma
 - Same space-padding as ADDR
-- ADDR used LF line endings, but CHEM uses CRLF - so we'll need a different `ROW SEPARATOR` when loading
+- Same CRLF line endings as ADDR
 
-### Loading CHEM into Exasol
+Add to your notes:
 
-CRLF line endings, has header (SKIP = 1), 3 columns:
+```bash
+cat >> data/notes.md << 'EOF'
 
-```sql
-CREATE TABLE STG_RAW_CHEM_201008 (
-    CHEM_SUB VARCHAR(50),
-    NAME VARCHAR(2000),
-    PERIOD VARCHAR(200)
-);
-```
-
-Single line:
-
-```sql
-CREATE TABLE STG_RAW_CHEM_201008 (CHEM_SUB VARCHAR(50), NAME VARCHAR(2000), PERIOD VARCHAR(200));
-```
-
-Import the data:
-
-```sql
-IMPORT INTO STG_RAW_CHEM_201008
-FROM CSV AT 'https://files.digital.nhs.uk/15/ED9D38'
-FILE 'T201008CHEM%20SUBS.CSV'
-COLUMN SEPARATOR = ','
-ROW SEPARATOR = 'CRLF'
-SKIP = 1
-ENCODING = 'UTF8';
-```
-
-Single line:
-
-```sql
-IMPORT INTO STG_RAW_CHEM_201008 FROM CSV AT 'https://files.digital.nhs.uk/15/ED9D38' FILE 'T201008CHEM%20SUBS.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'CRLF' SKIP = 1 ENCODING = 'UTF8';
-```
-
-```sql
-SELECT COUNT(*) FROM STG_RAW_CHEM_201008;
-```
-
-Check a few rows:
-
-```sql
-SELECT * FROM STG_RAW_CHEM_201008 LIMIT 5;
-```
-
-Clean up with TRIM:
-
-```sql
-CREATE TABLE STG_CHEM_201008 (
-    CHEM_SUB VARCHAR(15),
-    NAME VARCHAR(200),
-    PERIOD VARCHAR(6)
-);
-```
-
-Single line:
-
-```sql
-CREATE TABLE STG_CHEM_201008 (CHEM_SUB VARCHAR(15), NAME VARCHAR(200), PERIOD VARCHAR(6));
-```
-
-Insert with TRIM:
-
-```sql
-INSERT INTO STG_CHEM_201008
-SELECT
-    TRIM(CHEM_SUB),
-    TRIM(NAME),
-    '201008'
-FROM STG_RAW_CHEM_201008;
-```
-
-Single line:
-
-```sql
-INSERT INTO STG_CHEM_201008 SELECT TRIM(CHEM_SUB), TRIM(NAME), '201008' FROM STG_RAW_CHEM_201008;
-```
-
-Drop the raw table:
-
-```sql
-DROP TABLE STG_RAW_CHEM_201008;
-```
-
-Verify the clean data:
-
-```sql
-SELECT * FROM STG_CHEM_201008 LIMIT 5;
+## CHEM (chemical substances)
+- Has header row (unusual: third column contains period value instead of column name)
+- CRLF line endings
+- ~3.5K rows per month
+- Same space-padding and trailing comma as ADDR
+- Columns: CHEM_SUB, NAME, PERIOD
+EOF
 ```
 
 ### PDPI - prescriptions (fact)
@@ -625,16 +266,16 @@ Comparing with ADDR and CHEM:
 Check the line endings:
 
 ```bash
-file data/pdpi_201008_sample.csv
+head -1 data/pdpi_201008_sample.csv | cat -A | tail -c 20
 ```
 
 Output:
 
 ```
-data/pdpi_201008_sample.csv: CSV ASCII text
+                 ^M$
 ```
 
-LF line endings, same as ADDR.
+CRLF, same as ADDR and CHEM.
 
 - Each row is one prescription: which practice prescribed what drug (BNF CODE/NAME), how many items, the cost (NIC = net ingredient cost, ACT COST = actual cost), and the quantity dispensed
 - PRACTICE links to ADDR, the first 9 characters of BNF CODE link to CHEM SUB
@@ -642,9 +283,349 @@ LF line endings, same as ADDR.
 - There's a trailing comma after the last field, creating an extra empty column
 - The file has a header row
 
+Add to your notes:
+
+```bash
+cat >> data/notes.md << 'EOF'
+
+## PDPI (prescriptions - fact table)
+- Has header row
+- CRLF line endings
+- ~10M rows per month
+- Same space-padding and trailing comma as ADDR and CHEM
+- Numeric columns are zero-padded (e.g. 0000031, 00000083.79)
+- Columns: SHA, PCT, PRACTICE, BNF_CODE, BNF_NAME, ITEMS, NIC, ACT_COST, QUANTITY, PERIOD
+- PRACTICE links to ADDR.PRACTICE_CODE
+- First 9 chars of BNF_CODE link to CHEM.CHEM_SUB
+EOF
+```
+
+Note that the usual `file` command doesn't reliably detect CRLF in CSV files — it uses "magic" patterns that may suppress line ending information depending on file size and content.
+
+### Initialize the project
+
+While Exasol is still deploying, let's set up our Python project:
+
+```bash
+mkdir -p code
+cd code
+```
+
+```bash
+uv init
+```
+
+```bash
+uv add requests beautifulsoup4 pyexasol
+```
+
+### Scrape available data URLs
+
+Set the base URL for downloading reference scripts:
+
+```bash
+PREFIX=https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference
+```
+
+Download the URL scraper:
+
+```bash
+wget ${PREFIX}/find_urls.py
+```
+
+This script scrapes the [dataset page](https://www.data.gov.uk/dataset/176ae264-2484-4afe-a297-d51798eb8228/prescribing-by-gp-practice-presentation-level) to find all available CSV file URLs. Run it:
+
+```bash
+uv run python find_urls.py
+```
+
+It saves `data/prescription_urls.json` with ~101 months of data (2010-2018).
+
+
+## Connecting to Exasol
+
+By now the deployment should be complete. Open a new terminal and go to the deployment directory:
+
+```bash
+cd deployment
+```
+
+When `exasol install` finishes, it prints connection details: host, port, username, and password. You can also find the password in `secrets-*.json`.
+
+Exasol exposes a PostgreSQL-compatible interface, so you can connect with any PostgreSQL client. Using `pgcli`:
+
+```bash
+uvx pgcli -h <host> -p 5432 -U sys -W
+```
+
+Replace `<host>` with the DNS name from the deployment output (e.g. `ec2-....compute.amazonaws.com`). Enter the database password when prompted — you can find it in `deployment/secrets-*.json`.
+
+Alternatively, set up the VS Code Exasol extension — see [vscode.md](vscode.md) for instructions.
+
+Test the connection with a simple query:
+
+```sql
+SELECT 'Hello from Exasol!' AS greeting;
+```
+
+
+## Loading data via SQL
+
+Now let's load the October 2010 data we downloaded earlier. We'll create staging tables, import the CSVs directly from their URLs, clean up the data, and then build warehouse tables.
+
+First, create schemas to organize our tables:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS PRESCRIPTIONS_UK_STAGING;
+CREATE SCHEMA IF NOT EXISTS PRESCRIPTIONS_UK;
+OPEN SCHEMA PRESCRIPTIONS_UK_STAGING;
+```
+
+The staging schema holds temporary tables for raw imports and transformations. The warehouse schema holds the final clean tables that analysts query.
+
+### Loading ADDR into Exasol
+
+No header (SKIP = 0), CRLF line endings, 9 columns (including the trailing empty one from the trailing comma).
+
+Create the raw staging table:
+
+```sql
+CREATE TABLE STG_RAW_ADDR_201008 (
+    PERIOD VARCHAR(100),
+    PRACTICE_CODE VARCHAR(100),
+    PRACTICE_NAME VARCHAR(2000),
+    ADDRESS_1 VARCHAR(2000),
+    ADDRESS_2 VARCHAR(2000),
+    ADDRESS_3 VARCHAR(2000),
+    COUNTY VARCHAR(2000),
+    POSTCODE VARCHAR(200),
+    EXTRA_PADDING VARCHAR(2000)
+);
+```
+
+Single line:
+
+```sql
+CREATE TABLE STG_RAW_ADDR_201008 (PERIOD VARCHAR(100), PRACTICE_CODE VARCHAR(100), PRACTICE_NAME VARCHAR(2000), ADDRESS_1 VARCHAR(2000), ADDRESS_2 VARCHAR(2000), ADDRESS_3 VARCHAR(2000), COUNTY VARCHAR(2000), POSTCODE VARCHAR(200), EXTRA_PADDING VARCHAR(2000));
+```
+
+Import the data:
+
+```sql
+IMPORT INTO STG_RAW_ADDR_201008
+FROM CSV AT 'https://files.digital.nhs.uk/7D/F8A6AF'
+FILE 'T201008ADDR%20BNFT.CSV'
+COLUMN SEPARATOR = ','
+ROW SEPARATOR = 'CRLF'
+SKIP = 0
+ENCODING = 'UTF8';
+```
+
+Single line:
+
+```sql
+IMPORT INTO STG_RAW_ADDR_201008 FROM CSV AT 'https://files.digital.nhs.uk/7D/F8A6AF' FILE 'T201008ADDR%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'CRLF' SKIP = 0 ENCODING = 'UTF8';
+```
+
+Check how many rows were loaded:
+
+```sql
+SELECT COUNT(*) FROM STG_RAW_ADDR_201008;
+```
+
+About 10,263 rows.
+
+Clean up with TRIM — create a trimmed staging table with tighter column sizes:
+
+```sql
+CREATE TABLE STG_ADDR_201008 (
+    PERIOD VARCHAR(6),
+    PRACTICE_CODE VARCHAR(20),
+    PRACTICE_NAME VARCHAR(200),
+    ADDRESS_1 VARCHAR(200),
+    ADDRESS_2 VARCHAR(200),
+    ADDRESS_3 VARCHAR(200),
+    COUNTY VARCHAR(200),
+    POSTCODE VARCHAR(20)
+);
+```
+
+Single line:
+
+```sql
+CREATE TABLE STG_ADDR_201008 (PERIOD VARCHAR(6), PRACTICE_CODE VARCHAR(20), PRACTICE_NAME VARCHAR(200), ADDRESS_1 VARCHAR(200), ADDRESS_2 VARCHAR(200), ADDRESS_3 VARCHAR(200), COUNTY VARCHAR(200), POSTCODE VARCHAR(20));
+```
+
+Insert with TRIM — we hardcode the period since it comes from the CSV as a data column, not a proper constant:
+
+```sql
+INSERT INTO STG_ADDR_201008
+SELECT
+    '201008',
+    TRIM(PRACTICE_CODE),
+    TRIM(PRACTICE_NAME),
+    TRIM(ADDRESS_1),
+    TRIM(ADDRESS_2),
+    TRIM(ADDRESS_3),
+    TRIM(COUNTY),
+    TRIM(POSTCODE)
+FROM STG_RAW_ADDR_201008;
+```
+
+Single line:
+
+```sql
+INSERT INTO STG_ADDR_201008 SELECT '201008', TRIM(PRACTICE_CODE), TRIM(PRACTICE_NAME), TRIM(ADDRESS_1), TRIM(ADDRESS_2), TRIM(ADDRESS_3), TRIM(COUNTY), TRIM(POSTCODE) FROM STG_RAW_ADDR_201008;
+```
+
+Drop the raw table:
+
+```sql
+DROP TABLE STG_RAW_ADDR_201008;
+```
+
+Now combine the three address fields into one. The PRACTICE dimension table doesn't need ADDRESS_1/2/3 separately — a single ADDRESS field is cleaner:
+
+```sql
+CREATE TABLE STG_PROCESSED_ADDR_201008 (
+    PERIOD VARCHAR(6),
+    PRACTICE_CODE VARCHAR(20),
+    PRACTICE_NAME VARCHAR(200),
+    ADDRESS VARCHAR(600),
+    COUNTY VARCHAR(200),
+    POSTCODE VARCHAR(20)
+);
+```
+
+Single line:
+
+```sql
+CREATE TABLE STG_PROCESSED_ADDR_201008 (PERIOD VARCHAR(6), PRACTICE_CODE VARCHAR(20), PRACTICE_NAME VARCHAR(200), ADDRESS VARCHAR(600), COUNTY VARCHAR(200), POSTCODE VARCHAR(20));
+```
+
+Concatenate the address parts, removing empty segments:
+
+```sql
+INSERT INTO STG_PROCESSED_ADDR_201008
+SELECT
+    PERIOD,
+    PRACTICE_CODE,
+    PRACTICE_NAME,
+    TRIM(BOTH ', ' FROM REPLACE(
+        COALESCE(ADDRESS_1, '') || ', ' ||
+        COALESCE(ADDRESS_2, '') || ', ' ||
+        COALESCE(ADDRESS_3, ''),
+        ', , ', ', '
+    )),
+    COUNTY,
+    POSTCODE
+FROM STG_ADDR_201008;
+```
+
+Single line:
+
+```sql
+INSERT INTO STG_PROCESSED_ADDR_201008 SELECT PERIOD, PRACTICE_CODE, PRACTICE_NAME, TRIM(BOTH ', ' FROM REPLACE(COALESCE(ADDRESS_1, '') || ', ' || COALESCE(ADDRESS_2, '') || ', ' || COALESCE(ADDRESS_3, ''), ', , ', ', ')), COUNTY, POSTCODE FROM STG_ADDR_201008;
+```
+
+Verify:
+
+```sql
+SELECT * FROM STG_PROCESSED_ADDR_201008 LIMIT 5;
+```
+
+### Loading CHEM into Exasol
+
+CRLF line endings, has header (SKIP = 1), 3 columns (CHEM_SUB, NAME, PERIOD):
+
+```sql
+CREATE TABLE STG_RAW_CHEM_201008 (
+    CHEM_SUB VARCHAR(50),
+    NAME VARCHAR(2000),
+    PERIOD VARCHAR(200)
+);
+```
+
+Single line:
+
+```sql
+CREATE TABLE STG_RAW_CHEM_201008 (CHEM_SUB VARCHAR(50), NAME VARCHAR(2000), PERIOD VARCHAR(200));
+```
+
+Import the data:
+
+```sql
+IMPORT INTO STG_RAW_CHEM_201008
+FROM CSV AT 'https://files.digital.nhs.uk/15/ED9D38'
+FILE 'T201008CHEM%20SUBS.CSV'
+COLUMN SEPARATOR = ','
+ROW SEPARATOR = 'CRLF'
+SKIP = 1
+ENCODING = 'UTF8';
+```
+
+Single line:
+
+```sql
+IMPORT INTO STG_RAW_CHEM_201008 FROM CSV AT 'https://files.digital.nhs.uk/15/ED9D38' FILE 'T201008CHEM%20SUBS.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'CRLF' SKIP = 1 ENCODING = 'UTF8';
+```
+
+Check the count:
+
+```sql
+SELECT COUNT(*) FROM STG_RAW_CHEM_201008;
+```
+
+About 3,289 rows.
+
+Clean up with TRIM:
+
+```sql
+CREATE TABLE STG_CHEM_201008 (
+    CHEM_SUB VARCHAR(15),
+    NAME VARCHAR(200),
+    PERIOD VARCHAR(6)
+);
+```
+
+Single line:
+
+```sql
+CREATE TABLE STG_CHEM_201008 (CHEM_SUB VARCHAR(15), NAME VARCHAR(200), PERIOD VARCHAR(6));
+```
+
+Insert with TRIM — we hardcode the period instead of using the one from the CSV (which is in the odd third column):
+
+```sql
+INSERT INTO STG_CHEM_201008
+SELECT
+    TRIM(CHEM_SUB),
+    TRIM(NAME),
+    '201008'
+FROM STG_RAW_CHEM_201008;
+```
+
+Single line:
+
+```sql
+INSERT INTO STG_CHEM_201008 SELECT TRIM(CHEM_SUB), TRIM(NAME), '201008' FROM STG_RAW_CHEM_201008;
+```
+
+Drop the raw table:
+
+```sql
+DROP TABLE STG_RAW_CHEM_201008;
+```
+
+Verify:
+
+```sql
+SELECT * FROM STG_CHEM_201008 LIMIT 5;
+```
+
 ### Loading PDPI into Exasol
 
-LF line endings, has header (SKIP = 1), 11 columns (including the trailing empty one). This one takes a minute or two since it's loading ~10M rows over the network:
+CRLF line endings, has header (SKIP = 1), 11 columns (including the trailing empty one). This one takes a minute or two since it's loading ~10M rows over the network:
 
 ```sql
 CREATE TABLE STG_RAW_PDPI_201008 (
@@ -675,7 +656,7 @@ IMPORT INTO STG_RAW_PDPI_201008
 FROM CSV AT 'https://files.digital.nhs.uk/B9/14BEAF'
 FILE 'T201008PDPI%20BNFT.CSV'
 COLUMN SEPARATOR = ','
-ROW SEPARATOR = 'LF'
+ROW SEPARATOR = 'CRLF'
 SKIP = 1
 ENCODING = 'UTF8';
 ```
@@ -683,7 +664,7 @@ ENCODING = 'UTF8';
 Single line:
 
 ```sql
-IMPORT INTO STG_RAW_PDPI_201008 FROM CSV AT 'https://files.digital.nhs.uk/B9/14BEAF' FILE 'T201008PDPI%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'LF' SKIP = 1 ENCODING = 'UTF8';
+IMPORT INTO STG_RAW_PDPI_201008 FROM CSV AT 'https://files.digital.nhs.uk/B9/14BEAF' FILE 'T201008PDPI%20BNFT.CSV' COLUMN SEPARATOR = ',' ROW SEPARATOR = 'CRLF' SKIP = 1 ENCODING = 'UTF8';
 ```
 
 Check how many rows were loaded:
@@ -773,10 +754,6 @@ The approach differs between facts and dimensions:
 
 - The fact table (PRESCRIPTION) uses DELETE + INSERT per period. We first delete any existing rows for that month, then insert from staging. This prevents duplicating millions of rows on a re-run. The DELETE is a no-op on the first run.
 - Dimension tables (PRACTICE, CHEMICAL) keep one row per entity. We use MERGE to insert new entities and update existing ones when the incoming period is newer. The PERIOD column tracks when each row was last updated - not a snapshot, just "this is the most recent data we have for this entity". We don't know yet whether dimensions actually change between months (e.g. does a practice move to a new address?) - we need to load all the data and analyze it first.
-
-```sql
-CREATE SCHEMA IF NOT EXISTS PRESCRIPTIONS_UK;
-```
 
 The PRACTICE dimension table maps directly from the clean staging data. The address concatenation was already done in the staging step, so the MERGE is straightforward:
 
@@ -965,29 +942,12 @@ Once we load all 101 months, we can analyze how the data actually changes over t
 
 We loaded one month manually to understand the process. Now let's automate it - first with Python scripts, then with Kestra as a workflow orchestrator.
 
-### Setup
+We already set up the project directory and scraped the available URLs earlier. Make sure you're in the `code/` directory and that `PREFIX` is still set:
 
 ```bash
 cd code
-uv add requests beautifulsoup4 pyexasol
-```
-
-### Find available data URLs
-
-Set the base URL for downloading reference scripts:
-
-```bash
 PREFIX=https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference
 ```
-
-Download the URL scraper and run it:
-
-```bash
-wget ${PREFIX}/find_urls.py
-uv run python find_urls.py
-```
-
-This scrapes the [dataset page](https://www.data.gov.uk/dataset/176ae264-2484-4afe-a297-d51798eb8228/prescribing-by-gp-practice-presentation-level) and saves `data/prescription_urls.json` with ~101 months of data (2010-2018).
 
 ### Shared utilities module
 
@@ -1009,35 +969,55 @@ wget ${PREFIX}/utils/db.py -O utils/db.py
 
 ```bash
 wget ${PREFIX}/load_addr.py
-uv run python load_addr.py --period 201008
 ```
 
-This runs the same pipeline we did manually: STG_RAW → STG (trim) → STG_PROCESSED (address concat) → MERGE into PRACTICE.
+This automates the same pipeline we did manually: STG_RAW → STG (trim) → STG_PROCESSED (address concat) → MERGE into PRACTICE.
+
+Run it:
+
+```bash
+uv run python load_addr.py --period 201008
+```
 
 ### Load CHEM (chemical substances)
 
 ```bash
 wget ${PREFIX}/load_chem.py
-uv run python load_chem.py --period 201008
 ```
 
-Same pattern: STG_RAW → STG (trim) → MERGE into CHEMICAL.
+Same pattern as ADDR: STG_RAW → STG (trim) → MERGE into CHEMICAL.
+
+Run it:
+
+```bash
+uv run python load_chem.py --period 201008
+```
 
 ### Load PDPI (prescriptions)
 
 ```bash
 wget ${PREFIX}/load_pdpi.py
-uv run python load_pdpi.py --period 201008
 ```
 
 This is the big one (~10M rows). Pipeline: STG_RAW → STG (trim) → DELETE + INSERT into PRESCRIPTION.
 
+Run it:
+
+```bash
+uv run python load_pdpi.py --period 201008
+```
+
 ### Verify the data
 
-Download and run the analytics check script:
+Download the analytics check script:
 
 ```bash
 wget ${PREFIX}/check.py
+```
+
+This queries the warehouse to verify everything loaded correctly: row counts for all three tables, top 10 drugs by total cost, and top 10 practices by prescription volume. Run it:
+
+```bash
 uv run python check.py
 ```
 
@@ -1084,21 +1064,17 @@ We have Python scripts that load one month at a time, but there are 101 months t
 
 ### Start Kestra
 
-The [docker-compose file](reference/kestra/docker-compose.yml) mounts the project root into the Kestra container at `/workspace`, so both `code/` and `deployment/` are available. Download it and start Kestra:
+The [docker-compose file](reference/kestra/docker-compose.yml) mounts the project root into the Kestra container at `/workspace`, so both `code/` and `deployment/` are available. Download it:
 
 ```bash
 cd code
 mkdir -p kestra
 wget ${PREFIX}/kestra/docker-compose.yml -O kestra/docker-compose.yml
-cd kestra
-docker compose up -d
 ```
 
-Kestra runs as root inside the container. To avoid permission issues with the `.venv` directory it creates, initialize it first:
+Now start Kestra:
 
 ```bash
-cd code
-uv sync
 cd kestra
 docker compose up -d
 ```
@@ -1110,7 +1086,7 @@ Wait a minute for it to start, then open the Kestra UI at http://localhost:8080.
 Let's start simple to see how Kestra works. In the Kestra UI, go to Flows, click Create. Paste the following:
 
 ```yaml
-id: hello
+id: load_test_month
 namespace: prescriptions
 
 tasks:
@@ -1146,11 +1122,31 @@ Now try adding a third task yourself - run `load_addr.py` for period `201008`:
 
 Save and Execute. You should see all three tasks complete.
 
+Verify in your SQL terminal that the data was loaded:
+
+```sql
+SELECT COUNT(*) FROM PRESCRIPTIONS_UK.PRACTICE;
+SELECT COUNT(*) FROM PRESCRIPTIONS_UK.CHEMICAL;
+SELECT COUNT(*) FROM PRESCRIPTIONS_UK.PRESCRIPTION;
+```
+
+You should see ~10K practices, ~3.3K chemicals, and ~9.8M prescriptions.
+
 ### Load a single month
 
 We already loaded one month manually. Now let's create a proper flow for it. Each loader script supports a `--step` argument that runs a single stage of the pipeline, so every stage (ingest raw CSV, trim whitespace, transform, warehouse load) becomes a separate step in the Kestra flow - visible in the UI with its own logs and status.
 
-Tasks in a Kestra `tasks` list run sequentially - each task waits for the previous one to finish. Each pipeline type has its own flow definition: [load_addr.yml](reference/kestra/load_addr.yml), [load_chem.yml](reference/kestra/load_chem.yml), and [load_pdpi.yml](reference/kestra/load_pdpi.yml). The [load_month.yml](reference/kestra/load_month.yml) flow calls them as subflows sequentially:
+Download the flow definitions into `kestra/flows/`. Kestra watches this directory and auto-imports any YAML files — the naming convention `main_<namespace>_<flow_id>.yml` tells Kestra which namespace and ID to use:
+
+```bash
+mkdir -p kestra/flows
+wget ${PREFIX}/kestra/flows/main_prescriptions_load_addr.yml -O kestra/flows/main_prescriptions_load_addr.yml
+wget ${PREFIX}/kestra/flows/main_prescriptions_load_chem.yml -O kestra/flows/main_prescriptions_load_chem.yml
+wget ${PREFIX}/kestra/flows/main_prescriptions_load_pdpi.yml -O kestra/flows/main_prescriptions_load_pdpi.yml
+wget ${PREFIX}/kestra/flows/main_prescriptions_load_month.yml -O kestra/flows/main_prescriptions_load_month.yml
+```
+
+The flows should appear in the Kestra UI automatically. Each pipeline type has its own flow definition: [load_addr](reference/kestra/flows/main_prescriptions_load_addr.yml), [load_chem](reference/kestra/flows/main_prescriptions_load_chem.yml), and [load_pdpi](reference/kestra/flows/main_prescriptions_load_pdpi.yml). The [load_month](reference/kestra/flows/main_prescriptions_load_month.yml) flow calls them as subflows sequentially:
 
 ```
 load_month(period)
@@ -1159,22 +1155,15 @@ load_month(period)
   └─ load_pdpi(period)  →  load_raw → trim → insert
 ```
 
-Each subflow has `allowFailure: true` so if one pipeline fails (e.g. a source URL is down), the others still run. Each also has `retry` configured — on failure, Kestra retries up to 3 times with a 10-second pause (`PT10S` — ISO 8601 duration format, where `PT` means "period of time", e.g. `PT1M` = 1 minute, `PT10S` = 10 seconds).
+Tasks in a Kestra `tasks` list run sequentially - each task waits for the previous one to finish. Each subflow has `allowFailure: true` so if one pipeline fails (e.g. a source URL is down), the others still run. Each also has `retry` configured — on failure, Kestra retries up to 3 times with a 10-second pause (`PT10S` — ISO 8601 duration format, where `PT` means "period of time", e.g. `PT1M` = 1 minute, `PT10S` = 10 seconds).
 
 Note that `load_month` does not include `install_deps` or `find_urls` — those are run once by `load_all` before iterating over months.
 
-Via the UI: go to Flows, click Create, paste the content of `load_month.yml`, click Save. Then click Execute, enter `201008` as the period, and click Execute.
+The flows are auto-imported from the `kestra/flows/` directory. In the UI, go to Flows, find `load_month`, click Execute, enter `201008` as the period, and click Execute.
 
-Via the API:
+Or via the API:
 
 ```bash
-# Create the flow
-curl -u "admin@kestra.io:Admin1234!" \
-  -X POST http://localhost:8080/api/v1/flows \
-  -H "Content-Type: application/x-yaml" \
-  --data-binary @kestra/load_month.yml
-
-# Execute it
 curl -u "admin@kestra.io:Admin1234!" \
   -X POST http://localhost:8080/api/v1/executions/prescriptions/load_month \
   -H "Content-Type: multipart/form-data" \
@@ -1183,36 +1172,40 @@ curl -u "admin@kestra.io:Admin1234!" \
 
 ### Load all months
 
-Now that we have the `load_month` flow, we can reuse it. The [load_all.yml](reference/kestra/load_all.yml) flow uses `Subflow` to call `load_month` for each period - no need to duplicate the pipeline steps:
+Download the flow:
+
+```bash
+wget ${PREFIX}/kestra/flows/main_prescriptions_load_all.yml -O kestra/flows/main_prescriptions_load_all.yml
+```
+
+The [load_all](reference/kestra/flows/main_prescriptions_load_all.yml) flow reuses `load_month` via `Subflow` — no need to duplicate the pipeline steps:
 
 1. Installs dependencies and finds all available URLs
 2. Uses the Kestra Python library to extract the list of 101 periods
 3. ForEach iterates over all periods, calling `load_month` as a subflow for each one
 4. After all months are loaded, runs `check.py` to verify the final state
 
-Via the UI: go to Flows, click Create, paste the content of `load_all.yml`, click Save, then Execute.
+In the UI, go to Flows, find `load_all`, and click Execute.
 
-Via the API:
+Or via the API:
 
 ```bash
-# Create the flow
-curl -u "admin@kestra.io:Admin1234!" \
-  -X POST http://localhost:8080/api/v1/flows \
-  -H "Content-Type: application/x-yaml" \
-  --data-binary @kestra/load_all.yml
-
-# Execute it
 curl -u "admin@kestra.io:Admin1234!" \
   -X POST http://localhost:8080/api/v1/executions/prescriptions/load_all
 ```
 
 Loading all 101 months takes about 30 minutes with 4 concurrent threads. You can monitor progress in the UI - each month shows as a separate iteration in the ForEach task, and each stage within that iteration is a separate step with its own logs.
 
-Why `concurrencyLimit: 4`? The Exasol Community Edition allows only 5 parallel connections. Each month runs its pipelines sequentially (one connection at a time), so 4 concurrent months use 4 connections — safely within the limit.
+Why `concurrencyLimit: 4`? The Exasol Community Edition allows only 5 parallel connections. Each month runs its pipelines sequentially (one connection at a time), so 4 concurrent months use 4 connections — leaving one connection free for querying while the load runs.
 
 Some months may fail due to unavailable source URLs (a few older months link to servers that are no longer online). The flow continues past failures — you'll see failed months marked in the UI, but the rest will keep loading. Since all our scripts are idempotent, you can re-run the flow safely. Already-loaded months will be overwritten with identical data.
 
 
+## Grafana dashboard
+
+While the data is loading, let's set up a Grafana dashboard to visualize the data. As more months load, you'll see the dashboard update with new data — a good way to monitor the load progress and start exploring the dataset visually.
+
+TODO
 
 
 ## Managing the cluster
@@ -1246,8 +1239,6 @@ This terminates the EC2 instance and cleans up all AWS resources.
 
 ## Troubleshooting
 
-- **AWS CLI not found?** Install it using the instructions in the [Prerequisites](#prerequisites) section above
-- **AWS credentials error?** Run `aws sts get-caller-identity` to verify your credentials are configured correctly
 - Codespace created before setting the secret? Rebuild it: `Cmd/Ctrl+Shift+P` -> "Rebuild Container"
 - "Wrong passphrase"? Double-check with your instructor
 - Permission errors on AWS? Ask your instructor -- the role may need updated permissions
