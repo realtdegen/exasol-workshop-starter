@@ -12,3 +12,6 @@ deployment/.workflowState.json
 
 # Data files
 data/
+*.bak.*
+.DS_Store
+docs/.gitkeep
