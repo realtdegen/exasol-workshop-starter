@@ -1,36 +1,56 @@
 #!/bin/bash
-# Installs a .bashrc hook that decrypts the workshop token on every shell open.
-# If WORKSHOP_PASSPHRASE is set (via Codespaces secret), it's fully automatic.
-# If not, it prompts once and caches the result.
-
-cat >> ~/.bashrc << 'BASHRC_HOOK'
+# .devcontainer/setup-aws.sh
+# Decrypts bearer token, calls Lambda vending machine, writes AWS credentials.
+set -euo pipefail
 
 echo "================================================"
-echo "CODESPACE: $CODESPACE_NAME"
-echo "REPO:      $GITHUB_REPOSITORY"
-echo "BRANCH:    $(git branch --show-current)"
-echo "COMMIT:    $(git log --oneline -1)"
-echo "AWS CLI:   $(aws --version 2>/dev/null || echo NOT FOUND)"
+echo "CODESPACE: ${CODESPACE_NAME:-local}"
+echo "COMMIT:    $(git log --oneline -1 2>/dev/null || echo unknown)"
 echo "================================================"
 
-# --- Workshop AWS credentials ---
-if [ -z "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ] && [ -n "$WORKSHOP_CRED_URL" ] && [ -n "$WORKSHOP_TOKEN_ENC" ]; then
-    if [ -z "$WORKSHOP_PASSPHRASE" ]; then
-        read -rsp "Enter workshop passphrase: " WORKSHOP_PASSPHRASE
-        echo ""
-    fi
-    if [ -n "$WORKSHOP_PASSPHRASE" ]; then
-        _TOKEN=$(echo "$WORKSHOP_TOKEN_ENC" | openssl enc -aes-256-cbc -d -a -pbkdf2 -pass "pass:$WORKSHOP_PASSPHRASE" 2>/dev/null)
-        if [ -n "$_TOKEN" ]; then
-            export AWS_CONTAINER_CREDENTIALS_FULL_URI="$WORKSHOP_CRED_URL"
-            export AWS_CONTAINER_AUTHORIZATION_TOKEN="$_TOKEN"
-        else
-            echo "Wrong passphrase. Run: bash .devcontainer/setup-aws.sh"
-        fi
-        unset _TOKEN
-    fi
+if [ -z "${WORKSHOP_PASSPHRASE:-}" ]; then
+  read -rsp "Enter workshop passphrase: " WORKSHOP_PASSPHRASE
+  echo ""
 fi
-# --- End workshop AWS credentials ---
-BASHRC_HOOK
 
-echo "AWS credential hook installed in .bashrc"
+BEARER_TOKEN=$(echo "${WORKSHOP_TOKEN_ENC}" \
+  | openssl enc -aes-256-cbc -d -a -pbkdf2 \
+    -pass "pass:${WORKSHOP_PASSPHRASE}" 2>/dev/null || true)
+
+if [ -z "${BEARER_TOKEN:-}" ]; then
+  echo "❌ Wrong passphrase or corrupt token."
+  echo "   Re-run: bash .devcontainer/setup-aws.sh"
+  exit 1
+fi
+
+CREDS_JSON=$(curl -sf \
+  -H "Authorization: ${BEARER_TOKEN}" \
+  "${WORKSHOP_CRED_URL}" || true)
+
+if [ -z "${CREDS_JSON:-}" ]; then
+  echo "❌ Lambda returned empty response. Check WORKSHOP_CRED_URL."
+  exit 1
+fi
+
+mkdir -p ~/.aws
+cat > ~/.aws/credentials << EOF
+[default]
+aws_access_key_id     = $(echo "${CREDS_JSON}" | jq -r .AccessKeyId)
+aws_secret_access_key = $(echo "${CREDS_JSON}" | jq -r .SecretAccessKey)
+aws_session_token     = $(echo "${CREDS_JSON}" | jq -r .Token)
+EOF
+
+cat > ~/.aws/config << EOF
+[default]
+region = ${AWS_DEFAULT_REGION:-eu-central-1}
+output = json
+EOF
+
+chmod 600 ~/.aws/credentials ~/.aws/config
+
+echo "✅ AWS credentials written"
+echo "   Expiry: $(echo "${CREDS_JSON}" | jq -r '.Expiration // "n/a"')"
+
+aws sts get-caller-identity \
+  && echo "✅ AWS identity verified" \
+  || echo "❌ aws sts failed"
