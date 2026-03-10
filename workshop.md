@@ -352,15 +352,7 @@ cd deployment
 
 When `exasol install` finishes, it prints connection details: host, port, username, and password. You can also find the password in `secrets-*.json`.
 
-Exasol exposes a PostgreSQL-compatible interface, so you can connect with any PostgreSQL client. Using `pgcli`:
-
-```bash
-uvx pgcli -h <host> -p 5432 -U sys -W
-```
-
-Replace `<host>` with the DNS name from the deployment output (e.g. `ec2-....compute.amazonaws.com`). Enter the database password when prompted — you can find it in `deployment/secrets-*.json`.
-
-Alternatively, set up the VS Code Exasol extension — see [vscode.md](vscode.md) for instructions.
+Set up the VS Code Exasol extension — see [vscode.md](vscode.md) for instructions.
 
 Test the connection with a simple query:
 
