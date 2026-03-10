@@ -1061,6 +1061,7 @@ The [docker-compose file](reference/kestra/docker-compose.yml) mounts the projec
 ```bash
 cd code
 mkdir -p kestra
+PREFIX=https://raw.githubusercontent.com/alexeygrigorev/exasol-workshop-starter/main/reference
 wget ${PREFIX}/kestra/docker-compose.yml -O kestra/docker-compose.yml
 ```
 
