@@ -366,6 +366,7 @@ Test the connection with a simple query:
 
 ```sql
 SELECT 'Hello from Exasol!' AS greeting;
+SELECT 'HellOOOO from ExasOOOOOl!' AS greeting;
 ```
 
 
